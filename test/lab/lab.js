@@ -115,8 +115,9 @@ class Service {
     this.child.stdout.on('data', d => { this.log += d; });
     this.child.stderr.on('data', d => { this.log += d; });
     this.exited = new Promise(resolve => this.child.on('exit', (code, signal) => resolve({ code, signal })));
-    const end = Date.now() + 60000;
+    const end = Date.now() + 45000; // shorter than the longest test timeout, so a service that never starts is reported with its own log
     for (;;) {
+      if (!this.alive()) throw new Error(`the service exited while starting (code ${this.child.exitCode}, signal ${this.child.signalCode}):\n${this.log}`);
       if ((await request(`${this.url}/healthz`, { timeout: 3000 })).status === 200) break;
       if (Date.now() > end) throw new Error(`the service did not start:\n${this.log}`);
       await sleep(250);

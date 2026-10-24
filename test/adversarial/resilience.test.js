@@ -110,7 +110,7 @@ test('SIGTERM while busy: running pages finish, new ones are refused, exit code 
   await svc.stop();
 });
 
-test('SIGTERM when idle exits at once', { skip, timeout: 60000 }, async () => {
+test('SIGTERM when idle exits at once', { skip, timeout: 120000 }, async () => {
   const svc = await new Service(ENV).start();
   const t0 = Date.now();
   svc.child.kill('SIGTERM');
