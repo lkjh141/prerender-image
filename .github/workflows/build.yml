@@ -43,9 +43,37 @@ jobs:
           CHROME_BIN: /nonexistent/chromium
         run: npm test
 
+  adversarial:
+    name: Attack and load tests against a real browser
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install the locked dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Find the browser on the runner
+        run: |
+          chrome="$(command -v google-chrome-stable || command -v google-chrome || command -v chromium || true)"
+          [ -n "$chrome" ] || { echo "no browser on this runner"; exit 1; }
+          echo "CHROME_BIN=$chrome" >> "$GITHUB_ENV"
+          "$chrome" --version
+
+      - name: Run every suite, with the browser (SSRF, response, input, exhaustion)
+        run: npm test
+
   image:
     name: Build, test, scan and publish the image
-    needs: test
+    needs: [test, adversarial]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -53,12 +81,20 @@ jobs:
       packages: write
       id-token: write
       attestations: write
+    outputs:
+      image: ${{ steps.names.outputs.image }}
+      digest: ${{ steps.publish.outputs.digest }}
     env:
       PUBLISH: ${{ github.event_name != 'pull_request' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: npm
 
       - name: Work out the image name and tags
         id: names
@@ -93,6 +129,28 @@ jobs:
 
       - name: Smoke test (read-only, no capabilities, unprivileged)
         run: scripts/smoke.sh prerender-image:ci
+
+      - name: Attack, exhaustion and input suites against the built image
+        # The same suites that run against a local process in the "real browser" job, now against the container as shipped (Alpine's
+        # Chromium, read-only, no capabilities). The settings below are the ones the suites were written for.
+        run: |
+          npm ci --ignore-scripts
+          docker run -d --name suite --network host \
+            --read-only --tmpfs /tmp:size=1g --cap-drop ALL --security-opt no-new-privileges:true \
+            -e PORT=3400 -e BROWSER_DEBUGGING_PORT=9444 -e ALLOWED_HOSTS=127.0.0.1 -e METRICS_ENABLED=true \
+            -e MAX_CONCURRENCY=3 -e MAX_QUEUE=6 -e QUEUE_TIMEOUT_MS=2500 -e PAGE_LOAD_TIMEOUT_MS=3000 -e REQUEST_TIMEOUT_MS=6000 \
+            -e TAB_MAX_AGE_MS=9000 -e MAX_RESPONSE_BYTES=2097152 \
+            prerender-image:ci
+          for _ in $(seq 1 90); do
+            [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3400/healthz)" = "200" ] && break
+            sleep 1
+          done
+          status=0
+          SERVICE_URL=http://127.0.0.1:3400 node --test --test-concurrency=1 \
+            test/adversarial/ssrf.test.js test/adversarial/response.test.js test/adversarial/input.test.js test/adversarial/exhaustion.test.js || status=$?
+          docker logs suite 2>&1 | tail -n 40 || true
+          docker rm -f suite >/dev/null 2>&1 || true
+          exit "$status"
 
       - name: Scan for fixable HIGH and CRITICAL vulnerabilities
         uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8 # v0.33.1
@@ -151,3 +209,60 @@ jobs:
             echo "${{ steps.names.outputs.image }}@${{ steps.publish.outputs.digest }}"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # What was pushed is what gets checked: pull the image by the digest that was just published, run the same container smoke test
+  # against it, and verify its build attestation. This is the verification of every merge onto main.
+  verify-published:
+    name: Verify the published image
+    needs: image
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+      attestations: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Sign in to the container registry
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Smoke test the image exactly as published
+        run: |
+          ref="${{ needs.image.outputs.image }}@${{ needs.image.outputs.digest }}"
+          docker pull "$ref"
+          scripts/smoke.sh "$ref"
+
+      - name: Verify the build attestation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh attestation verify "oci://${{ needs.image.outputs.image }}@${{ needs.image.outputs.digest }}" --repo "$GITHUB_REPOSITORY"
+
+  # The one result everything else keys on: branch protection requires this check, and the auto-merge workflow looks for it by
+  # name on the pull request's head commit. It passes only when every job above passed (the publish check is skipped on pull
+  # requests, which is fine).
+  verified:
+    name: Verified
+    needs: [test, adversarial, image, verify-published]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - name: Every job passed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          node -e '
+            const needs = JSON.parse(process.env.RESULTS);
+            const bad = Object.entries(needs).filter(([name, n]) => !(n.result === "success" || (name === "verify-published" && n.result === "skipped")));
+            for (const [name, n] of Object.entries(needs)) console.log(name + ": " + n.result);
+            if (bad.length) { console.error("Not verified: " + bad.map(([name]) => name).join(", ")); process.exit(1); }
+          '

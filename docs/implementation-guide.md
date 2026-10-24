@@ -36,7 +36,7 @@ Check that it started and is healthy:
 ```sh
 docker compose up -d
 docker compose ps                      # STATUS shows "healthy" after about 20 seconds
-curl -i http://127.0.0.1:3000/         # 403: the service is up and refuses an empty request
+curl -i http://127.0.0.1:3000/healthz  # 200 once the browser is up
 curl -s http://127.0.0.1:3000/https://example.com/ | head   # your own page, rendered (use your host)
 curl -i http://127.0.0.1:3000/https://other.example/        # 403: not in ALLOWED_HOSTS
 ```
@@ -158,6 +158,7 @@ spec:
     metadata:
       labels: { app: prerender }
     spec:
+      terminationGracePeriodSeconds: 30   # longer than DRAIN_TIMEOUT_MS, so running pages can finish
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
@@ -170,10 +171,10 @@ spec:
           ports:
             - containerPort: 3000
           readinessProbe:
-            tcpSocket: { port: 3000 }          # an empty request is answered with 403 on purpose, so an HTTP probe would fail
+            httpGet: { path: /healthz, port: 3000 }   # 200 only while the browser is connected and the pod is not shutting down
           resources:
-            requests: { memory: 512Mi, cpu: 250m }
-            limits: { memory: 1Gi }
+            requests: { memory: 1Gi, cpu: 500m }
+            limits: { memory: 2Gi }
           securityContext:
             readOnlyRootFilesystem: true
             allowPrivilegeEscalation: false
@@ -195,7 +196,7 @@ spec:
 ```
 
 Add a `NetworkPolicy` that allows ingress only from your web server and egress only to the internet and DNS, never to your cluster's
-private ranges: the guard blocks private addresses written as IP addresses, but a public DNS name that points at a private address is
+private ranges. The image's egress proxy already refuses private addresses, including names that resolve to them; the policy is a second layer. Before version 2 a public DNS name that pointed at a private address was
 resolved by the browser.
 
 ## 7. Troubleshooting
@@ -204,7 +205,7 @@ resolved by the browser.
 |---|---|
 | The container exits at once | `ALLOWED_HOSTS` is missing or contains something that is not a plain host name (a port, a scheme, a wildcard). The log line says which. |
 | `403` for a page of your own site | The host is not in `ALLOWED_HOSTS`, or you passed the wrong host (for example `www.` when only the bare name is listed). The log shows the refused address. |
-| The page comes back with an empty root element | The page was not finished when the service took its snapshot. Use `window.prerenderReady`, or raise `WAIT_AFTER_LAST_REQUEST` / `PAGE_LOAD_TIMEOUT`. |
+| The page comes back with an empty root element | The page was not finished when the service took its snapshot. Use `window.prerenderReady`, or raise `WAIT_AFTER_LAST_REQUEST_MS` / `PAGE_LOAD_TIMEOUT_MS`. |
 | `504` | The render failed or timed out. Check that the service can reach your site, and that the page finishes loading. |
 | A part of the page is missing | The page loads it from a private address or a non-web scheme, which is blocked. Put that host in `ALLOWED_HOSTS` only if it is meant to be reached. |
 | Square boxes instead of text | A language needs a font the image does not contain. Open an issue, or add the package to the Dockerfile. |

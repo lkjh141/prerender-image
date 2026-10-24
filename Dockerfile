@@ -25,7 +25,9 @@ RUN apk upgrade --no-cache \
 ENV NODE_ENV=production \
     HOME=/tmp \
     PORT=3000 \
-    CHROME_BIN=/usr/bin/chromium
+    CHROME_BIN=/usr/bin/chromium \
+    NODE_OPTIONS=--max-old-space-size=384 \
+    UV_THREADPOOL_SIZE=16
 
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
@@ -36,9 +38,10 @@ COPY lib ./lib
 USER node
 EXPOSE 3000
 
-# Any answer below 500 means the service is up (an empty request is refused with 403, which proves the guard is running).
-HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
-  CMD node -e "require('http').get('http://127.0.0.1:'+(process.env.PORT||3000)+'/',r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1))"
+# /healthz answers 200 only while the browser is connected and the service is not shutting down.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+  CMD node -e "require('http').get('http://127.0.0.1:'+(process.env.PORT||3000)+'/healthz',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
 
-ENTRYPOINT ["/sbin/tini", "--"]
+# -g sends the stop signal to the whole process group, so the browser and its helpers hear it too.
+ENTRYPOINT ["/sbin/tini", "-g", "--"]
 CMD ["node", "server.js"]
