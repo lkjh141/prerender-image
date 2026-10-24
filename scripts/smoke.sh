@@ -41,14 +41,11 @@ docker run -d --name "$name" --network host \
   "$image" >/dev/null
 
 echo "waiting for the service"
-for _ in $(seq 1 60); do
-  if curl -s -o /dev/null "http://127.0.0.1:$service_port/"; then break; fi
+for _ in $(seq 1 90); do
+  if [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$service_port/healthz")" = "200" ]; then break; fi
   sleep 1
 done
-for _ in $(seq 1 60); do
-  if docker logs "$name" 2>&1 | grep -q "Started"; then break; fi
-  sleep 1
-done
+[ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$service_port/healthz")" = "200" ] || { echo "the service never became ready"; exit 1; }
 
 echo "renders a page built by a script"
 body="$(curl -sf "http://127.0.0.1:$service_port/http://127.0.0.1:$site_port/index.html")"
@@ -60,10 +57,22 @@ code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$service_port/h
 [ "$code" = "404" ] || { echo "expected 404, got $code"; exit 1; }
 
 echo "refuses hosts that are not allowed"
-for target in "http://example.org/" "http://169.254.169.254/latest/meta-data/" "file:///etc/passwd"; do
+for target in "http://example.org/" "http://169.254.169.254/latest/meta-data/" "http://localhost/"; do
   code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$service_port/$target")"
   [ "$code" = "403" ] || { echo "expected 403 for $target, got $code"; exit 1; }
 done
+code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$service_port/file:///etc/passwd")"
+{ [ "$code" = "400" ] || [ "$code" = "403" ]; } || { echo "expected a refusal for file:, got $code"; exit 1; }
+
+echo "answers bad input with a short fixed text, never a stack trace"
+for path in "/http://127.0.0.1:$site_port/%zz" "/http://127.0.0.1:$site_port/%c0%af" "/render?url=http://127.0.0.1:$site_port/" "/nonsense"; do
+  reply="$(curl -s -w ' [%{http_code}]' "http://127.0.0.1:$service_port$path")"
+  echo "$reply" | grep -Eq 'node_modules|/app/|at .*\(|Error:' && { echo "internals leaked for $path: $reply"; exit 1; }
+  echo "$reply" | grep -Eq '\[(400|404)\]$' || { echo "unexpected answer for $path: $reply"; exit 1; }
+done
+code="$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$service_port/render" -d '{"url":"http://127.0.0.1"}')"
+[ "$code" = "405" ] || { echo "the render API should be closed, got $code"; exit 1; }
+[ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$service_port/metrics")" = "404" ] || { echo "metrics are on without being asked for"; exit 1; }
 
 echo "runs as an unprivileged user"
 uid="$(docker exec "$name" id -u)"
@@ -83,4 +92,12 @@ done
 [ "$health" = "healthy" ] || { echo "health status is $health"; exit 1; }
 
 echo "Chromium: $(docker exec "$name" chromium --version 2>/dev/null || true)"
+
+echo "stops cleanly on SIGTERM"
+started=$(date +%s)
+docker stop -t 30 "$name" >/dev/null
+exit_code="$(docker inspect --format '{{.State.ExitCode}}' "$name")"
+elapsed=$(( $(date +%s) - started ))
+[ "$exit_code" = "0" ] || { echo "exit code $exit_code on stop"; exit 1; }
+[ "$elapsed" -lt 20 ] || { echo "stopping took ${elapsed}s"; exit 1; }
 echo "smoke test passed"

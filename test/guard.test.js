@@ -24,7 +24,7 @@ test('ALLOWED_HOSTS refuses anything that is not a plain host name, so a typo st
 test('the container will not start without a host list unless every host is allowed on purpose', () => {
   assert.throws(() => loadConfig({}), /ALLOWED_HOSTS/);
   assert.throws(() => loadConfig({ ALLOWED_HOSTS: ' , ' }), /ALLOWED_HOSTS/);
-  assert.deepEqual(loadConfig({ ALLOWED_HOSTS: 'example.com' }), { allowedHosts: ['example.com'], allowAnyHost: false, blockResources: false });
+  assert.deepEqual(loadConfig({ ALLOWED_HOSTS: 'example.com' }), { allowedHosts: ['example.com'], allowAnyHost: false, allowPrivate: false, allowInvalidCerts: false, blockResources: false });
   assert.equal(loadConfig({ ALLOW_ANY_HOST: 'true' }).allowAnyHost, true);
   assert.equal(loadConfig({ ALLOWED_HOSTS: 'a.example', ALLOW_ANY_HOST: 'yes' }).allowAnyHost, false, 'only the word true counts');
   assert.equal(loadConfig({ ALLOWED_HOSTS: 'a.example', BLOCK_RESOURCES: 'TRUE' }).blockResources, true);

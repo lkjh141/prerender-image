@@ -1,0 +1,47 @@
+name: Auto-merge
+
+# Merges pull requests that are verified and approved, and Dependabot patch and minor updates that are verified. The rules are in
+# scripts/automerge-policy.js and have tests. A major Dependabot update is merged only after a person with write access approves it.
+#
+# This workflow never checks out or runs code from a pull request. It runs the script from main and only reads facts through the API.
+
+on:
+  workflow_run:
+    workflows: [Build]
+    types: [completed]
+  pull_request_review:
+    types: [submitted, dismissed]
+  schedule:
+    # A safety net for events that were missed (for example a check that finished while mergeability was still being worked out).
+    - cron: '23 * * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: automerge
+  cancel-in-progress: false
+
+jobs:
+  merge:
+    name: Merge what is ready
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # A review on a pull request from a fork gets no write token, and forks are never merged automatically anyway.
+    if: github.event_name != 'pull_request_review' || github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: write        # merge
+      pull-requests: write   # approve safe Dependabot updates, merge
+      actions: write         # start the Build workflow on main after a merge
+      checks: read           # read the Verified check
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+          sparse-checkout: scripts
+
+      - name: Merge the pull requests that are ready
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/automerge.js
