@@ -21,8 +21,9 @@ function fakeTab() {
   tab.finish = requestId => { delete tab.prerender.requests[requestId]; tab.prerender.numRequestsInFlight -= 1; };
   return tab;
 }
-const document = (requestId, extra = {}) => ({ requestId, type: 'Document', frameId: 'main', url: 'https://x/', ...extra });
-const script = requestId => ({ requestId, type: 'Script', frameId: 'main', url: `https://x/${requestId}.js` });
+// A document's loader id is its own request id; a script made by a document carries that document's loader id.
+const document = (requestId, extra = {}) => ({ requestId, type: 'Document', frameId: 'main', loaderId: requestId, url: 'https://x/', ...extra });
+const script = (requestId, loaderId = 'd1', frameId = 'main') => ({ requestId, type: 'Script', frameId, loaderId, url: `https://x/${requestId}.js` });
 
 function setup(t, settleMs = 750) {
   t.mock.timers.enable({ apis: ['setTimeout'] });
@@ -72,10 +73,30 @@ test('requests the new document starts are never written off', t => {
   tab.send(document('d1'));
   tab.send(script('old'));
   tab.send(document('d2'));
-  tab.send(script('new')); // started after the navigation
+  tab.send(script('new', 'd2')); // started after the navigation by the new document
   t.mock.timers.tick(1000);
   assert.deepEqual(Object.keys(tab.prerender.requests).sort(), ['d2', 'new']);
   assert.equal(tab.prerender.numRequestsInFlight, 2);
+});
+
+test('a request the old document makes while it unloads, after the new document was requested, is written off too', t => {
+  const { tab } = setup(t);
+  tab.send(document('d1'));
+  tab.send(document('d2')); // the page reloads itself
+  tab.send(script('beacon')); // an error reporter flushes while the old document unloads
+  tab.finish('d1');
+  tab.finish('d2');
+  t.mock.timers.tick(751);
+  assert.equal(tab.prerender.numRequestsInFlight, 0);
+});
+
+test('requests of another frame are never written off', t => {
+  const { tab } = setup(t);
+  tab.send(document('d1'));
+  tab.send(script('inframe', 'f1', 'sub'));
+  tab.send(document('d2'));
+  t.mock.timers.tick(5000);
+  assert.ok(tab.prerender.requests.inframe);
 });
 
 test('a redirect of the first page, a frame inside the page and the same document are not navigations', t => {
