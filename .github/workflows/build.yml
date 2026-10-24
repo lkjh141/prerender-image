@@ -1,0 +1,153 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  schedule:
+    # Every Monday: rebuild from scratch so Alpine and Chromium security fixes reach the published image even when nothing here changed.
+    - cron: '17 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: Tests and dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install the locked dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Audit production dependencies (no advisory is accepted)
+        run: npm audit --omit=dev
+
+      - name: Unit tests (the browser test runs against the built image below)
+        env:
+          CHROME_BIN: /nonexistent/chromium
+        run: npm test
+
+  image:
+    name: Build, test, scan and publish the image
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    env:
+      PUBLISH: ${{ github.event_name != 'pull_request' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Work out the image name and tags
+        id: names
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          {
+            echo "image=${image}"
+            echo "tags<<EOF"
+            echo "${image}:latest"
+            echo "${image}:sha-${GITHUB_SHA::12}"
+            echo "${image}:$(date -u +%Y%m%d)"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build the image for testing
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          load: true
+          tags: prerender-image:ci
+          # The weekly build starts from nothing so that `apk upgrade` sees today's packages.
+          no-cache: ${{ github.event_name == 'schedule' }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.licenses=MIT
+            org.opencontainers.image.description=Hardened, regularly rebuilt container image for the Prerender service
+
+      - name: Smoke test (read-only, no capabilities, unprivileged)
+        run: scripts/smoke.sh prerender-image:ci
+
+      - name: Scan for fixable HIGH and CRITICAL vulnerabilities
+        uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8 # v0.33.1
+        with:
+          image-ref: prerender-image:ci
+          severity: HIGH,CRITICAL
+          # A vulnerability that has no fixed version yet cannot be acted on; it is reported by the scan summary, not blocked.
+          # Everything that has a fix blocks the build, and the weekly rebuild picks the fix up.
+          ignore-unfixed: true
+          exit-code: '1'
+          format: table
+          version: v0.75.0
+
+      - name: Sign in to the container registry
+        if: env.PUBLISH == 'true'
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish the image
+        id: publish
+        if: env.PUBLISH == 'true'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.names.outputs.tags }}
+          cache-from: type=gha
+          provenance: mode=max
+          sbom: true
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.licenses=MIT
+            org.opencontainers.image.description=Hardened, regularly rebuilt container image for the Prerender service
+
+      - name: Attest where and how the image was built
+        if: env.PUBLISH == 'true'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ steps.names.outputs.image }}
+          subject-digest: ${{ steps.publish.outputs.digest }}
+          push-to-registry: true
+
+      - name: Print the digest to pin
+        if: env.PUBLISH == 'true'
+        run: |
+          {
+            echo "### Published"
+            echo
+            echo "Pin this digest in your deployment:"
+            echo
+            echo '```'
+            echo "${{ steps.names.outputs.image }}@${{ steps.publish.outputs.digest }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

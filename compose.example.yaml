@@ -1,0 +1,17 @@
+# An example of running the image with the protections the README recommends. Replace the host names with yours.
+services:
+  prerender:
+    image: ghcr.io/OWNER/prerender-image@sha256:REPLACE_WITH_THE_DIGEST_YOU_REVIEWED
+    restart: unless-stopped
+    environment:
+      ALLOWED_HOSTS: "example.com,www.example.com"
+    ports:
+      - "127.0.0.1:3000:3000"   # reachable from this machine only; put your web server in front
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    mem_limit: 1g

@@ -1,0 +1,9 @@
+.git
+.github
+node_modules
+test
+scripts
+*.md
+LICENSE
+NOTICE
+compose.example.yaml

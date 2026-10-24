@@ -1,0 +1,9 @@
+This repository contains the build files for a container image. The image bundles other software under its own licences:
+
+- Prerender (https://github.com/prerender/prerender), MIT licence, Copyright (c) 2014 Todd Hooper. Its licence text is in
+  node_modules/prerender/LICENSE inside the image.
+- Node.js, under the Node.js licence, from the official node:alpine image.
+- Chromium and the fonts, from Alpine Linux packages, each under the licence stated in its package.
+- The npm packages in package-lock.json, each under its own licence.
+
+This project is not affiliated with or endorsed by Prerender Inc. or the Chromium project.
