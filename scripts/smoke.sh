@@ -69,6 +69,11 @@ echo "runs as an unprivileged user"
 uid="$(docker exec "$name" id -u)"
 [ "$uid" != "0" ] || { echo "the container runs as root"; exit 1; }
 
+echo "has no package manager inside"
+if docker exec "$name" sh -c 'command -v npm || command -v npx || command -v yarn || command -v corepack' >/dev/null 2>&1; then
+  echo "a package manager is still in the image"; exit 1
+fi
+
 echo "reports healthy"
 for _ in $(seq 1 30); do
   health="$(docker inspect --format '{{.State.Health.Status}}' "$name")"

@@ -15,7 +15,12 @@ FROM ${NODE_IMAGE}
 # Chromium and fonts come from Alpine's own repositories, so Alpine's security updates apply. tini is PID 1 so signals reach
 # Node and stray Chromium processes are reaped.
 RUN apk upgrade --no-cache \
- && apk add --no-cache chromium tini font-noto font-noto-emoji
+ && apk add --no-cache chromium tini font-noto font-noto-emoji \
+ && rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+           /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
+           /usr/local/bin/yarn /usr/local/bin/yarnpkg /opt/yarn-*
+# The last line removes the package managers that ship with the Node base image. The service never runs them, and their bundled
+# libraries are a regular source of vulnerability reports. Dependencies are installed in the build stage above.
 
 ENV NODE_ENV=production \
     HOME=/tmp \
