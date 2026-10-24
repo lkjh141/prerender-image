@@ -221,3 +221,26 @@ test('CONNECT through the proxy: the first of two resolved addresses is dead, th
     assert.ok(Date.now() - t0 < 2500, `took ${Date.now() - t0} ms`);
   } finally { await p.close(); echo.close(); }
 });
+
+test('diagnostics: each tunnel is logged when it opens and when it closes, with who closed it and the bytes moved', async () => {
+  const echo = net.createServer(socket => socket.on('data', d => socket.write(d)));
+  await new Promise(r => echo.listen(0, '127.0.0.1', r));
+  const lines = [];
+  const diagSettings = { ...loadSettings({ EGRESS_DNS_TTL_MS: '0' }), DIAGNOSTICS: true };
+  const p = createEgressProxy({ config: { allowedHosts: ['127.0.0.1'], allowPrivate: false }, settings: diagSettings, reservedPorts: new Set(), lookup, log: l => lines.push(l) });
+  const port = await p.listen();
+  try {
+    await new Promise((resolve, reject) => {
+      const socket = net.connect(port, '127.0.0.1', () => socket.write(`CONNECT 127.0.0.1:${echo.address().port} HTTP/1.1\r\nHost: x\r\n\r\n`));
+      let data = '';
+      socket.on('data', d => { data += d; if (/200/.test(data) && !data.includes('hello')) socket.write('hello'); if (data.includes('hello')) { socket.destroy(); setTimeout(resolve, 100); } });
+      socket.on('error', reject);
+    });
+    assert.ok(lines.some(l => /DIAG tunnel 1 127\.0\.0\.1:\d+ open via 127\.0\.0\.1 connect \d+ ms/.test(l)), lines.join('\n'));
+    assert.ok(lines.some(l => /DIAG tunnel 1 .* closed after \d+ ms, closed first by browser, browser->server 5 B, server->browser 5 B/.test(l)), lines.join('\n'));
+  } finally { await p.close(); echo.close(); }
+  const quiet = [];
+  const p2 = createEgressProxy({ config: { allowedHosts: [], allowPrivate: false }, settings: loadSettings({}), reservedPorts: new Set(), lookup, log: l => quiet.push(l) });
+  await p2.decide('public.example', 443);
+  assert.deepEqual(quiet, [], 'no diagnostics unless asked for');
+});

@@ -121,3 +121,41 @@ test('the plugin fails blocked requests and continues the others', async () => {
   paused({ requestId: '2', request: { url: 'https://example.com/app.js' } });
   assert.deepEqual(calls, [['enable'], ['fail', '1', 'BlockedByClient'], ['continue', '2']]);
 });
+
+test('PAGE_FILTER=false leaves the browser alone: no interception is switched on and nothing is paused', async () => {
+  const plugin = createGuardPlugin(config, () => {}, { pageFilter: false });
+  const calls = [];
+  const Fetch = { requestPaused: () => calls.push('requestPaused'), enable: async () => calls.push('enable'), failRequest: async () => {}, continueRequest: async () => {} };
+  await new Promise(resolve => plugin.tabCreated({ prerender: { tab: { Fetch } } }, {}, resolve));
+  assert.deepEqual(calls, []);
+});
+
+test('diagnostics: a request that stays paused is named, and a failed release is reported', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const lines = [];
+  const plugin = createGuardPlugin(config, line => lines.push(line), { diagnostics: true });
+  let paused;
+  const Fetch = {
+    requestPaused: handler => { paused = handler; }, enable: async () => {}, failRequest: async () => {},
+    continueRequest: ({ requestId }) => (requestId === 'bad' ? Promise.reject(new Error('No such request')) : new Promise(() => { /* never resolves */ })),
+  };
+  await new Promise(resolve => plugin.tabCreated({ prerender: { tab: { Fetch } } }, {}, resolve));
+  paused({ requestId: 'stuck', request: { url: 'https://example.com/stuck.js' } });
+  paused({ requestId: 'bad', request: { url: 'https://example.com/bad.js' } });
+  await Promise.resolve(); await Promise.resolve();
+  t.mock.timers.tick(3100);
+  assert.ok(lines.some(l => /paused for 3 s.*stuck\.js/.test(l)), lines.join('\n'));
+  assert.ok(lines.some(l => /continueRequest failed.*No such request/.test(l)), lines.join('\n'));
+  assert.ok(!lines.some(l => /bad\.js.*paused for 3 s/.test(l)), 'a request that was released is not reported');
+});
+
+test('without diagnostics the guard says nothing extra', async () => {
+  const lines = [];
+  const plugin = createGuardPlugin(config, line => lines.push(line));
+  let paused;
+  const Fetch = { requestPaused: h => { paused = h; }, enable: async () => {}, failRequest: async () => {}, continueRequest: () => Promise.reject(new Error('x')) };
+  await new Promise(resolve => plugin.tabCreated({ prerender: { tab: { Fetch } } }, {}, resolve));
+  paused({ requestId: '1', request: { url: 'https://example.com/a.js' } });
+  await new Promise(r => setImmediate(r));
+  assert.deepEqual(lines, []);
+});

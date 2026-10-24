@@ -22,7 +22,9 @@ plain message; nothing is silently replaced by a default.
 | `HOST` | `0.0.0.0` | Address the front server binds inside the container. Publish it on loopback only (`127.0.0.1:3000:3000`). |
 | `BROWSER_DEBUGGING_PORT` | `9222` | Chromium's DevTools port, inside the container, never reachable from a page. |
 | `METRICS_ENABLED` | `false` | `true` serves Prometheus text on `/metrics` (same port; do not expose it publicly). |
-| `LOG_REQUESTS` | `false` | Log every request. |
+| `LOG_REQUESTS` | `false` | Log every request (`+` when it starts, `-` when it finishes) and every request the page makes. |
+| `DIAGNOSTICS` | `false` | Extra logging for finding problems: one line when each browser connection through the egress proxy opens (address, connect time) and closes (who closed it first, bytes each way), and a line for any browser request that stays paused for 3 s. Verbose; for a canary, not for production. |
+| `PAGE_FILTER` | `true` | `false` switches off the per-page request filter (the browser's request interception). The egress proxy still enforces every network rule, so this keeps the SSRF protection; it only removes the second, in-page layer. For bisecting a problem, not a recommended setting. |
 
 ## Limits
 

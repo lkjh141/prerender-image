@@ -33,3 +33,13 @@ test('values are taken from the environment', () => {
   assert.equal(s.METRICS_ENABLED, true);
   assert.deepEqual(s.EGRESS_ALLOWED_PORTS, [80, 443, 8443]);
 });
+
+test('diagnostics are off by default and the page filter is on; both can be switched', () => {
+  const s = loadSettings({});
+  assert.equal(s.DIAGNOSTICS, false);
+  assert.equal(s.PAGE_FILTER, true);
+  assert.equal(loadSettings({ DIAGNOSTICS: 'true' }).DIAGNOSTICS, true);
+  assert.equal(loadSettings({ PAGE_FILTER: 'false' }).PAGE_FILTER, false);
+  assert.equal(loadSettings({ PAGE_FILTER: 'FALSE' }).PAGE_FILTER, false);
+  assert.equal(loadSettings({ PAGE_FILTER: 'nope' }).PAGE_FILTER, true, 'only the word false switches the filter off');
+});
