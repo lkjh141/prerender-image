@@ -40,7 +40,7 @@ function request(target, { method = 'GET', headers = {}, body = null, timeout = 
     try { url = typeof target === 'string' ? new URL(target) : target; } catch (error) { resolve({ error: String(error), ms: 0 }); return; }
     const options = { method, headers, host: url.hostname, port: url.port, path: raw ? target.path : url.pathname + url.search, timeout };
     const mod = url.protocol === 'https:' ? https : http;
-    const req = mod.request({ ...options, rejectUnauthorized: false }, res => {
+    const req = mod.request(options, res => {
       const chunks = [];
       res.on('data', c => chunks.push(c));
       res.on('end', () => { const buffer = Buffer.concat(chunks); resolve({ status: res.statusCode, headers: res.headers, body: buffer.toString('utf8'), buffer, ms: Date.now() - started }); });
@@ -117,7 +117,7 @@ class Service {
     this.exited = new Promise(resolve => this.child.on('exit', (code, signal) => resolve({ code, signal })));
     const end = Date.now() + 60000;
     for (;;) {
-      if (/Started/.test(this.log) && (await request(`${this.url}/`, { timeout: 3000 })).status) break;
+      if ((await request(`${this.url}/healthz`, { timeout: 3000 })).status === 200) break;
       if (Date.now() > end) throw new Error(`the service did not start:\n${this.log}`);
       await sleep(250);
     }
@@ -174,7 +174,7 @@ class Site {
     this.server = http.createServer((req, res) => {
       this.hits.push(req.url);
       const handler = this.routes.get(req.url.split('?')[0]);
-      if (handler) { handler(req, res); return; }
+      if (typeof handler === 'function') { handler(req, res); return; }
       res.writeHead(404, { 'content-type': 'text/plain' }); res.end('not found');
     });
     this.server.keepAliveTimeout = 1000;

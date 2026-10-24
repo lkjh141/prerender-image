@@ -44,4 +44,6 @@ jobs:
       - name: Merge the pull requests that are ready
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node scripts/automerge.js
+        run: |
+          if [ ! -f scripts/automerge.js ]; then echo "scripts/automerge.js is not on main yet; nothing to do"; exit 0; fi
+          node scripts/automerge.js

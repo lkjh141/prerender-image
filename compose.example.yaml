@@ -5,6 +5,10 @@ services:
     restart: unless-stopped
     environment:
       ALLOWED_HOSTS: "example.com,www.example.com"
+      # Tuning is optional; see docs/configuration.md. These are the defaults that matter most.
+      MAX_CONCURRENCY: "4"
+      MAX_QUEUE: "32"
+      # METRICS_ENABLED: "true"      # Prometheus text on /metrics; keep the port on loopback
     ports:
       - "127.0.0.1:3000:3000"   # reachable from this machine only; put your web server in front
     read_only: true
@@ -14,4 +18,5 @@ services:
     security_opt:
       - no-new-privileges:true
     pids_limit: 512
-    mem_limit: 1g
+    mem_limit: 2g                # about 1.2 GB for 4 pages at once plus the service; see docs/configuration.md
+    stop_grace_period: 30s       # longer than DRAIN_TIMEOUT_MS (15 s), so running pages can finish

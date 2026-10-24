@@ -1,6 +1,7 @@
 'use strict';
 
 const net = require('node:net');
+const v8 = require('node:v8');
 const prerender = require('prerender');
 const prerenderUtil = require('prerender/lib/util');
 const { loadConfig, createGuardPlugin } = require('./lib/guard');
@@ -8,6 +9,7 @@ const { loadSettings } = require('./lib/settings');
 const { createEgressProxy } = require('./lib/egress');
 const { createFront } = require('./lib/front');
 const { createWatchdog } = require('./lib/watchdog');
+const { createReleasePlugin } = require('./lib/release');
 
 const log = message => console.log(`${new Date().toISOString()} ${message}`);
 
@@ -21,9 +23,19 @@ try {
   process.exit(1);
 }
 
-// A crash is safer than limping on in an unknown state: the orchestrator restarts the container.
+// An exception nobody caught leaves the process in an unknown state: exit, and the orchestrator restarts the container.
 process.on('uncaughtException', error => { console.error(`uncaught exception: ${error && error.message}`); process.exit(1); });
-process.on('unhandledRejection', reason => { console.error(`unhandled rejection: ${reason && reason.message ? reason.message : reason}`); process.exit(1); });
+
+// A rejected promise nobody handled is different. Prerender asks the browser to close a JavaScript dialog one second after it
+// opens, without a catch; if the page or tab is already gone the browser answers "No dialog is showing", and Node's default
+// would then end the whole process. One page with alert() in a loop could take the service down that way. Log it and count it.
+const quiet = { unhandledRejections: 0 };
+process.on('unhandledRejection', reason => {
+  quiet.unhandledRejections += 1;
+  if (quiet.unhandledRejections <= 20 || quiet.unhandledRejections % 100 === 0) {
+    console.error(`unhandled rejection ignored (${quiet.unhandledRejections} so far): ${reason && reason.message ? reason.message : reason}`);
+  }
+});
 
 function freePort() {
   return new Promise((resolve, reject) => {
@@ -92,14 +104,19 @@ async function main() {
     logRequests: process.env.LOG_REQUESTS === 'true',
     pageLoadTimeout: settings.PAGE_LOAD_TIMEOUT_MS,
     waitAfterLastRequest: settings.WAIT_AFTER_LAST_REQUEST_MS || 1,
+    pageDoneCheckInterval: settings.PAGE_DONE_CHECK_INTERVAL_MS,
   });
 
   // The guard goes first, so a request that is not allowed never reaches the browser.
   server.use(createGuardPlugin(config, log));
   // The same default plugins the community image enables: pages can set their status code and headers with meta tags
-  // (prerender-status-code, prerender-header), and script tags are removed from the result.
-  server.use(prerender.httpHeaders());
+  // (prerender-status-code, prerender-header), and script tags are removed from the result (JSON-LD is kept).
+  // Script removal goes FIRST. With any status other than 200 the headers plugin ends the plugin chain, and a plugin registered after
+  // it never runs: in the stock order, every 404 page kept its application scripts.
   server.use(prerender.removeScriptTags());
+  server.use(prerender.httpHeaders());
+  // Last, so it runs after everything that reads the finished request: it hands the request's memory back (lib/release.js).
+  server.use(createReleasePlugin());
 
   const front = createFront({
     config,
@@ -108,15 +125,19 @@ async function main() {
     logRequests: process.env.LOG_REQUESTS === 'true',
     isBrowserConnected: () => Boolean(server.isBrowserConnected),
     inFlightInBrowser: () => (server.browserRequestsInFlight ? server.browserRequestsInFlight.size : 0),
+    underMemoryPressure: () => process.memoryUsage().heapUsed / v8.getHeapStatistics().heap_size_limit * 100 > settings.HEAP_SHED_PERCENT,
     getUtil: () => prerenderUtil,
     log,
     extraMetrics: () => [
+      (() => { const m = process.memoryUsage(); const mb = v => Math.round(v / 1048576); return `# TYPE prerender_node_rss_mb gauge\nprerender_node_rss_mb ${mb(m.rss)}\n# TYPE prerender_node_heap_used_mb gauge\nprerender_node_heap_used_mb ${mb(m.heapUsed)}\n# TYPE prerender_node_external_mb gauge\nprerender_node_external_mb ${mb(m.external + m.arrayBuffers)}\n`; })(),
       `# TYPE prerender_egress_allowed_total counter\nprerender_egress_allowed_total ${egress.stats.allowed}\n`,
       `# TYPE prerender_egress_blocked_total counter\nprerender_egress_blocked_total ${egress.stats.blocked}\n`,
       `# TYPE prerender_egress_open_connections gauge\nprerender_egress_open_connections ${egress.stats.openTunnels}\n`,
+      `# TYPE prerender_unhandled_rejections_total counter\nprerender_unhandled_rejections_total ${quiet.unhandledRejections}\n`,
       `# TYPE prerender_watchdog_tabs_closed_total counter\nprerender_watchdog_tabs_closed_total ${watchdog.stats.tabsClosed}\n`,
       `# TYPE prerender_browser_memory_restarts_total counter\nprerender_browser_memory_restarts_total ${watchdog.stats.restartsForMemory}\n`,
-      `# TYPE prerender_browser_rss_mb gauge\nprerender_browser_rss_mb ${watchdog.stats.lastRssMb}\n`,
+      `# TYPE prerender_browser_frozen_kills_total counter\nprerender_browser_frozen_kills_total ${watchdog.stats.killedFrozen}\n`,
+      `# TYPE prerender_browser_memory_mb gauge\nprerender_browser_memory_mb ${watchdog.stats.lastRssMb}\n`,
     ].join(''),
   });
   const watchdog = createWatchdog({ server, debugPort, settings, log });

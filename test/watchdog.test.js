@@ -35,7 +35,7 @@ async function fakeBrowser(targets) {
 test('tabs older than the limit are closed; the start-up tab and young tabs are not', async () => {
   let list = [{ id: 'boot', type: 'page' }];
   const b = await fakeBrowser(() => list);
-  const wd = createWatchdog({ server: { browser: {}, isBrowserConnected: true }, debugPort: b.port, settings: { TAB_MAX_AGE_MS: 150, BROWSER_MAX_RSS_MB: 1e9, BROWSER_DOWN_EXIT_S: 60 }, exit: () => assert.fail('must not exit') });
+  const wd = createWatchdog({ server: { browser: {}, isBrowserConnected: true }, debugPort: b.port, settings: { TAB_MAX_AGE_MS: 150, BROWSER_MAX_RSS_MB: 1e9, BROWSER_DOWN_EXIT_S: 60, BROWSER_RECYCLE_COOLDOWN_S: 0 }, exit: () => assert.fail('must not exit') });
   try {
     await wd.tick();
     list = [{ id: 'boot', type: 'page' }, { id: 'a', type: 'page' }, { id: 'sw', type: 'service_worker' }];
@@ -53,10 +53,11 @@ test('the browser is restarted when it uses too much memory: when idle above the
   const b = await fakeBrowser(() => []);
   let restarts = 0;
   const server = { browser: { chromeChild: { pid: process.pid } }, isBrowserConnected: true, browserRequestsInFlight: new Map([['r', 'u']]), restartBrowser: () => { restarts += 1; } };
+  const hog = Buffer.alloc(120 * 1024 * 1024, 1); // really commit some memory, so there is something to measure
   const own = treeRssMb(process.pid);
-  assert.ok(own > 20, `this process uses ${own} MB`);
   try {
-    const mk = limit => createWatchdog({ server, debugPort: b.port, settings: { TAB_MAX_AGE_MS: 1e6, BROWSER_MAX_RSS_MB: limit, BROWSER_DOWN_EXIT_S: 60 }, exit: () => {} });
+    assert.ok(own > 100 && hog.length > 0, `this process uses ${own} MB`);
+    const mk = limit => createWatchdog({ server, debugPort: b.port, settings: { TAB_MAX_AGE_MS: 1e6, BROWSER_MAX_RSS_MB: limit, BROWSER_DOWN_EXIT_S: 60, BROWSER_RECYCLE_COOLDOWN_S: 0 }, exit: () => {} });
     await mk(Math.floor(own * 0.75)).tick(); // above the limit but busy, and not above twice the limit
     assert.equal(restarts, 0, 'a busy browser is left alone below twice the limit');
     server.browserRequestsInFlight = new Map();
@@ -74,7 +75,7 @@ test('the process exits when no browser comes back, not before', async () => {
   const b = await fakeBrowser(() => []);
   let exited = null;
   const server = { browser: {}, isBrowserConnected: false, isBrowserClosing: false };
-  const wd = createWatchdog({ server, debugPort: b.port, settings: { TAB_MAX_AGE_MS: 1e6, BROWSER_MAX_RSS_MB: 1e9, BROWSER_DOWN_EXIT_S: 0.2 }, exit: code => { exited = code; } });
+  const wd = createWatchdog({ server, debugPort: b.port, settings: { TAB_MAX_AGE_MS: 1e6, BROWSER_MAX_RSS_MB: 1e9, BROWSER_DOWN_EXIT_S: 0.2, BROWSER_RECYCLE_COOLDOWN_S: 0 }, exit: code => { exited = code; } });
   try {
     await wd.tick();
     assert.equal(exited, null, 'not at the first sign');
