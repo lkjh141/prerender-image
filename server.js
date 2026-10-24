@@ -10,6 +10,7 @@ const { createEgressProxy } = require('./lib/egress');
 const { createFront } = require('./lib/front');
 const { createWatchdog } = require('./lib/watchdog');
 const { createReleasePlugin } = require('./lib/release');
+const { createOrphanPlugin } = require('./lib/orphans');
 
 const log = message => console.log(`${new Date().toISOString()} ${message}`);
 
@@ -111,6 +112,8 @@ async function main() {
   server.use(createGuardPlugin(config, log, { pageFilter: settings.PAGE_FILTER, diagnostics: settings.DIAGNOSTICS }));
   if (settings.DIAGNOSTICS) log('DIAGNOSTICS=true: extra logging for tunnels and paused requests');
   if (!settings.PAGE_FILTER) log('PAGE_FILTER=false: the per-page request filter is off; the egress proxy still enforces the network rules');
+  // A page that navigates itself can leave one request that never reports back (lib/orphans.js).
+  server.use(createOrphanPlugin({ settleMs: settings.NAVIGATION_SETTLE_MS, log }));
   // The same default plugins the community image enables: pages can set their status code and headers with meta tags
   // (prerender-status-code, prerender-header), and script tags are removed from the result (JSON-LD is kept).
   // Script removal goes FIRST. With any status other than 200 the headers plugin ends the plugin chain, and a plugin registered after

@@ -37,6 +37,7 @@ plain message; nothing is silently replaced by a default.
 | `REQUEST_TIMEOUT_MS` | 30000 | 1000–300000 | Hard deadline for one request, answered with 504. Must be larger than `PAGE_LOAD_TIMEOUT_MS`. |
 | `WAIT_AFTER_LAST_REQUEST_MS` | 500 | 0–30000 | Quiet time after the page's last network request before it counts as finished. The biggest part of the latency of a simple page. Lower is faster and risks cutting off pages that start a follow-up request after a pause. |
 | `PAGE_DONE_CHECK_INTERVAL_MS` | 100 | 20–5000 | How often the page is checked for being finished (adds up to this much delay). Prerender's own default is 500. |
+| `NAVIGATION_SETTLE_MS` | 750 | 100–10000 | When a page navigates itself (a script reload or redirect), the time given to requests of the old page to report back before they are written off. Chromium sometimes never reports a request that was started just before the navigation, and Prerender would then wait for it until the page-load timeout. |
 | `MAX_RESPONSE_BYTES` | 10485760 | 1024–209715200 | Largest rendered page returned; larger gets 502. |
 | `MAX_URL_LENGTH` | 2048 | 64–8192 | Longest request path accepted (414). |
 | `MAX_CONNECTIONS` | 512 | 1–10000 | Open client connections. |
