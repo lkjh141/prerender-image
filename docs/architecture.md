@@ -85,6 +85,9 @@ Every `WATCHDOG_INTERVAL_MS` (5 s):
   twice the limit, never more often than `BROWSER_RECYCLE_COOLDOWN_S`;
 - exits the process if no browser has been connected for `BROWSER_DOWN_EXIT_S`, so the orchestrator restarts the container.
 
+**During a browser restart** (crash, frozen browser, memory recycle) `/healthz` answers 503 and renders fail with 503 or 504 for a few seconds. A request that arrives in the moment
+between the browser reporting ready and a fresh page being openable can fail once more. The caller's fallback (nginx's `error_page 500 502 503 504`) is what keeps crawlers from seeing an error.
+
 ### Memory
 
 Prerender keeps the state of every finished request reachable for a long time (two timers it never cancels), about 4.5 MB per page. Memory is
