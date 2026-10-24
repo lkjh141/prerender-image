@@ -22,7 +22,9 @@ plain message; nothing is silently replaced by a default.
 | `HOST` | `0.0.0.0` | Address the front server binds inside the container. Publish it on loopback only (`127.0.0.1:3000:3000`). |
 | `BROWSER_DEBUGGING_PORT` | `9222` | Chromium's DevTools port, inside the container, never reachable from a page. |
 | `METRICS_ENABLED` | `false` | `true` serves Prometheus text on `/metrics` (same port; do not expose it publicly). |
-| `LOG_REQUESTS` | `false` | Log every request. |
+| `LOG_REQUESTS` | `false` | Log every request (`+` when it starts, `-` when it finishes) and every request the page makes. |
+| `DIAGNOSTICS` | `false` | Extra logging for finding problems: one line when each browser connection through the egress proxy opens (address, connect time) and closes (who closed it first, bytes each way), and a line for any browser request that stays paused for 3 s. Verbose; for a canary, not for production. |
+| `PAGE_FILTER` | `true` | `false` switches off the per-page request filter (the browser's request interception). The egress proxy still enforces every network rule, so this keeps the SSRF protection; it only removes the second, in-page layer. For bisecting a problem, not a recommended setting. |
 
 ## Limits
 
@@ -52,6 +54,7 @@ plain message; nothing is silently replaced by a default.
 | `BROWSER_DOWN_EXIT_S` | 60 | 5–3600 | Seconds without a working browser before the container exits. |
 | `DRAIN_TIMEOUT_MS` | 15000 | 0–120000 | Time given to running requests on SIGTERM. Keep the orchestrator's stop timeout above this. |
 | `EGRESS_MAX_TUNNELS` | 256 | 1–10000 | Connections a page may hold open. |
+| `EGRESS_CONNECT_TIMEOUT_MS` | 8000 | 500–60000 | Longest the proxy waits to connect to a page's server, all of the name's addresses together. Addresses are tried in turn (IPv4 first), the next after 250 ms or as soon as one fails, so one unreachable address does not stall the page. |
 | `EGRESS_IDLE_TIMEOUT_MS` | 30000 | 1000–600000 | Idle time before a page connection is closed. |
 | `EGRESS_MAX_LIFETIME_MS` | 120000 | 1000–3600000 | Longest a single page connection may last. |
 | `EGRESS_DNS_TTL_MS` | 30000 | 0–600000 | How long a resolved address is reused. |
