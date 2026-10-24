@@ -79,7 +79,15 @@ http {
 `;
 }
 
-const strip = html => html.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<noscript[\s\S]*?<\/noscript>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/\s+/g, ' ').trim();
+const ENTITIES = { '&amp;': '&', '&#39;': "'", '&quot;': '"', '&lt;': '<', '&gt;': '>' };
+// Text of an HTML document for comparison. Tags and the contents of script, style and noscript are removed; entities are decoded in ONE pass,
+// so "&amp;lt;" becomes "&lt;" and not "<".
+const strip = html => html
+  .replace(/<(script|style|noscript)\b[\s\S]*?<\/\1[^>]*>/gi, ' ')
+  .replace(/<[^>]+>/g, ' ')
+  .replace(/&(?:amp|#39|quot|lt|gt);/g, entity => ENTITIES[entity])
+  .replace(/\s+/g, ' ')
+  .trim();
 const words = text => new Set((text.toLowerCase().match(/[a-z0-9$]+/g) || []).filter(w => w.length > 2));
 function facts(html) {
   const get = re => { const m = re.exec(html); return m ? m[1] : ''; };

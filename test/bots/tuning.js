@@ -27,9 +27,9 @@ async function main() {
       const up = http.request({ host: '127.0.0.1', port: api.port, path: req.url, method: 'GET' }, r => { res.writeHead(r.statusCode, r.headers); r.pipe(res); });
       up.on('error', () => { res.writeHead(502); res.end(); }); up.end(); return;
     }
-    const file = path.join(SITE, req.url.split('?')[0].replace(/^\/+/, ''));
-    const known = fs.existsSync(file) && fs.statSync(file).isFile() ? file : path.join(SITE, 'index.html');
-    res.writeHead(200, { 'content-type': TYPES[path.extname(known)] || 'text/html' }); res.end(fs.readFileSync(known));
+    // Only these three files exist; every other path is the app shell. No part of the request is ever used to build a file path.
+    const name = ({ '/app.js': 'app.js', '/app.css': 'app.css' })[req.url.split('?')[0]] || 'index.html';
+    res.writeHead(200, { 'content-type': TYPES[path.extname(name)] }); res.end(fs.readFileSync(path.join(SITE, name)));
   });
   const sitePort = await listen(site);
   const rows = [];
