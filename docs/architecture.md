@@ -60,6 +60,7 @@ For every connection the proxy:
 - connects to the exact address it checked, so the browser never gets a second resolution to race (DNS rebinding);
 - never lets a page reach the service's own ports (public, Prerender, DevTools, the proxy), even if a loopback host is in `ALLOWED_HOSTS`;
 - lets hosts listed in `ALLOWED_HOSTS` be private on purpose (a development page) and any port; everyone else only `EGRESS_ALLOWED_PORTS` (80, 443);
+- tries the name's addresses in turn (IPv4 first; the next after 250 ms or as soon as one fails, like the browser does for itself) with an overall connect timeout, so one unreachable address cannot stall a page;
 - caps open connections, idle time and the lifetime of each connection.
 
 HTTPS and WebSocket go through as `CONNECT` tunnels. The proxy does not read or change the bytes, and Chromium still validates the certificate.

@@ -52,6 +52,7 @@ plain message; nothing is silently replaced by a default.
 | `BROWSER_DOWN_EXIT_S` | 60 | 5–3600 | Seconds without a working browser before the container exits. |
 | `DRAIN_TIMEOUT_MS` | 15000 | 0–120000 | Time given to running requests on SIGTERM. Keep the orchestrator's stop timeout above this. |
 | `EGRESS_MAX_TUNNELS` | 256 | 1–10000 | Connections a page may hold open. |
+| `EGRESS_CONNECT_TIMEOUT_MS` | 8000 | 500–60000 | Longest the proxy waits to connect to a page's server, all of the name's addresses together. Addresses are tried in turn (IPv4 first), the next after 250 ms or as soon as one fails, so one unreachable address does not stall the page. |
 | `EGRESS_IDLE_TIMEOUT_MS` | 30000 | 1000–600000 | Idle time before a page connection is closed. |
 | `EGRESS_MAX_LIFETIME_MS` | 120000 | 1000–3600000 | Longest a single page connection may last. |
 | `EGRESS_DNS_TTL_MS` | 30000 | 0–600000 | How long a resolved address is reused. |
