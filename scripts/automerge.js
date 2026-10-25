@@ -1,7 +1,7 @@
 'use strict';
 
 // Looks at every open pull request against main and merges the ones scripts/automerge-policy.js allows. It is safe to run as
-// often as you like: a pull request that is not ready is simply left alone. It never checks out or runs code from a pull request;
+// often as needed: a pull request that is not ready is simply left alone. It never checks out or runs code from a pull request;
 // it only reads facts from the GitHub API.
 
 const { execFileSync } = require('node:child_process');
@@ -53,7 +53,7 @@ async function sweep({ api, repo, log = console.log, dispatchBuild = true }) {
       try { await api('POST', `repos/${repo}/pulls/${number}/reviews`, { event: 'APPROVE', commit_id: pr.head.sha, body: 'Approved automatically: a patch or minor dependency update that passed the Verified check.' }); } catch (error) { log(`#${number}: could not add an approval (${String(error.message).split('\n')[0]})`); }
     }
     try {
-      // `sha` makes GitHub refuse the merge if a commit was pushed after we looked.
+      // `sha` makes GitHub refuse the merge if a commit was pushed after the checks were read, so a late push can never be merged unreviewed.
       await api('PUT', `repos/${repo}/pulls/${number}/merge`, { merge_method: 'squash', sha: pr.head.sha });
       merged += 1;
       log(`#${number}: merged`);

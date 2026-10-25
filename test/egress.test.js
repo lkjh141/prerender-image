@@ -48,11 +48,13 @@ test('numeric spellings of private addresses are refused after the resolver has 
   for (const host of ['2130706433', '0x7f.1', '017700000001']) assert.equal((await p.decide(host, 443)).ok, false, host);
 });
 
-test('only the listed ports are open unless the host itself is listed', async () => {
+test('only the listed ports are open, for listed hosts too unless they resolve to a private address', async () => {
   const p = proxy();
   assert.equal((await p.decide('rebind.example', 22)).reason, 'port');
   assert.equal((await proxy({ allowedHosts: [] }).decide('public.example', 6379)).reason, 'port');
-  assert.equal((await p.decide('public.example', 8080)).ok, true, 'a listed host may use any port');
+  assert.equal((await p.decide('public.example', 8080)).reason, 'port', 'a listed host that resolves to a public address keeps to the open ports');
+  assert.equal((await p.decide('public.example', 22)).reason, 'port', 'so a listed name pointing at the server own public address cannot reach ssh');
+  assert.equal((await p.decide('public.example', 443)).ok, true);
   assert.equal((await p.decide('public.example', 0)).reason, 'bad-target');
   assert.equal((await p.decide('public.example', 65536)).reason, 'bad-target');
   assert.equal((await p.decide('', 443)).reason, 'bad-target');
@@ -243,4 +245,18 @@ test('diagnostics: each tunnel is logged when it opens and when it closes, with 
   const p2 = createEgressProxy({ config: { allowedHosts: [], allowPrivate: false }, settings: loadSettings({}), reservedPorts: new Set(), lookup, log: l => quiet.push(l) });
   await p2.decide('public.example', 443);
   assert.deepEqual(quiet, [], 'no diagnostics unless asked for');
+});
+
+test('a listed host that resolves to a private address (a development page) may use any port, except the service own', async () => {
+  const p = proxy({ allowedHosts: ['dev.example'], allowPrivate: false });
+  assert.equal((await p.decide('dev.example', 5173)).ok, true);
+  assert.equal((await p.decide('dev.example', 3000)).reason, 'service-port');
+  assert.equal((await p.decide('dev.example', 9222)).reason, 'service-port');
+});
+
+test('the extra ports an operator opens apply to listed hosts too', async () => {
+  const custom = loadSettings({ EGRESS_DNS_TTL_MS: '0', EGRESS_ALLOWED_PORTS: '80,443,8443' });
+  const p = createEgressProxy({ config: { allowedHosts: ['public.example'], allowPrivate: false }, settings: custom, reservedPorts: new Set([3000]), lookup });
+  assert.equal((await p.decide('public.example', 8443)).ok, true);
+  assert.equal((await p.decide('public.example', 8080)).reason, 'port');
 });

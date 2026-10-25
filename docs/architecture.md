@@ -1,10 +1,13 @@
 # Architecture
 
+This page describes how the service is put together, why each part exists, and what each part does when something goes wrong. The settings named
+here are explained in [configuration](configuration.md). The attacks the design answers are in the [threat model](threat-model.md).
+
 ## The pieces
 
 ```
                       public port (PORT, default 3000)
- your web server ───────────────┐
+ the web server ────────────────┐
                                 ▼
                      ┌─────────────────────┐   loopback only    ┌──────────────────────┐
                      │  front server       │ ─────────────────► │  Prerender 5.21.6    │
@@ -14,7 +17,7 @@
                        queues, filters the                                 │ (loopback)
                        answer                                              ▼
                                                                 ┌──────────────────────┐
-   your site ◄──── egress proxy (lib/egress.js) ◄────────────── │  Chromium (headless) │
+   the site ◄───── egress proxy (lib/egress.js) ◄────────────── │  Chromium (headless) │
    (and what it         resolves names, refuses private         │  one browser context │
     loads)              addresses, pins the connection          │  per request         │
                                                                 └──────────────────────┘
@@ -25,19 +28,24 @@
 
 Everything runs in one container and one Node process, except Chromium and its helpers. `server.js` wires the parts together.
 
+Reading the diagram from top to bottom: a request comes in on the public port and meets the front server. The front server checks it and passes it to Prerender,
+which is only reachable from inside the container. Prerender drives Chromium over the DevTools protocol. Chromium loads the page, and every network connection
+it opens has to go through the egress proxy. The answer travels back up the same path, and the front server cleans it before sending it out.
+
 ### Why a front server
 
 Prerender is an Express app that starts listening by itself and exposes no hook for limits, error pages or health checks. It answers a
 malformed percent-escape with a page that shows a stack trace and file paths, and its `/render` API accepts JavaScript to run in the page.
-So Prerender is started on a loopback port that nothing outside the container can reach, and a small server of our own is the only public
-listener. It is the part that is easy to reason about and test (`test/front.test.js`).
+So Prerender is started on a loopback port that nothing outside the container can reach, and a small server written for this image is the only public
+listener. That server is small enough to reason about and test (`test/front.test.js`), which is the reason it sits in front instead of patching Prerender's own server.
 
 What the front server does, in order:
 
 1. Accepts only `GET /<http or https URL>`, plus `/healthz` (and `/metrics` if enabled). Every other method gets 405, every other path 404 or 400.
    The `/render` API is not reachable.
 2. Rejects control characters, undecodable escapes and over-long paths, with fixed one-line texts.
-3. Computes the target URL **with Prerender's own function** and checks it against `ALLOWED_HOSTS` (403). The same check runs again inside
+3. Computes the target URL **with Prerender's own function** and checks it against `ALLOWED_HOSTS` (403). Using Prerender's function matters: if the
+   front server parsed the URL differently, the allowlist check and the browser could disagree about which host is meant. The same check runs again inside
    Prerender, as a plugin, on the URL it will really fetch.
 4. Admits the request: `MAX_CONCURRENCY` render at once, `MAX_QUEUE` wait up to `QUEUE_TIMEOUT_MS`, the rest get 503 immediately. A client that
    leaves while waiting gives its place up. New work is also refused while the heap is nearly full (`HEAP_SHED_PERCENT`) and while draining.
@@ -45,6 +53,12 @@ What the front server does, in order:
 6. Builds the answer: only a short list of headers is passed on (no cookies, no security headers from the rendered site), status codes
    204/205/304 and anything outside 200 to 599 become 502, a `Location` must be http, https or a path, the body is always sent as
    `text/html; charset=utf-8`, and the service adds its own `nosniff`, `Referrer-Policy` and a restrictive `Content-Security-Policy`.
+
+The reason for step 6 is that the rendered page is untrusted. Whatever headers and status it asks for are only requests. The front server decides what is
+safe to pass to the caller.
+
+If the render cache is on (`CACHE_TTL_S`), it sits between steps 3 and 4. A request for a page that is already stored is answered from memory after the
+URL and host checks, and takes no render slot. The cache is described in [configuration](configuration.md#render-cache-optional-off-by-default).
 
 ### The egress proxy
 
@@ -54,12 +68,17 @@ image (`test/adversarial/ssrf.test.js`, see the [test report](test-report.md)). 
 `--proxy-server` pointing at an in-process proxy, `--proxy-bypass-list=<-loopback>` (so even loopback goes through it) and
 `--host-resolver-rules=MAP * ~NOTFOUND` (the browser resolves nothing itself).
 
+The effect is that the browser has no way to open a connection that the proxy does not see. It cannot look up a name on its own, and it is not allowed to
+skip the proxy for local addresses.
+
 For every connection the proxy:
 
-- resolves the name itself and refuses the connection if **any** returned address is private, loopback, link-local, multicast or otherwise not public;
+- resolves the name itself and refuses the connection if **any** returned address is private, loopback, link-local, multicast or otherwise not public.
+  The check classifies IPv6 addresses by what they stand for, so an IPv4 address wrapped in IPv6 (IPv4-mapped, NAT64, 6to4 and similar forms) is judged as the IPv4 address inside it;
 - connects to the exact address it checked, so the browser never gets a second resolution to race (DNS rebinding);
 - never lets a page reach the service's own ports (public, Prerender, DevTools, the proxy), even if a loopback host is in `ALLOWED_HOSTS`;
-- lets hosts listed in `ALLOWED_HOSTS` be private on purpose (a development page) and any port; everyone else only `EGRESS_ALLOWED_PORTS` (80, 443);
+- lets hosts listed in `ALLOWED_HOSTS` be private on purpose (a development page) and use any port; everyone else only `EGRESS_ALLOWED_PORTS` (80, 443).
+  A listed host that resolves to a private address may use any port except the service's own. A listed host that resolves to a public address keeps to `EGRESS_ALLOWED_PORTS`;
 - tries the name's addresses in turn (IPv4 first; the next after 250 ms or as soon as one fails, like the browser does for itself) with an overall connect timeout, so one unreachable address cannot stall a page;
 - caps open connections, idle time and the lifetime of each connection.
 
@@ -70,10 +89,22 @@ HTTPS and WebSocket go through as `CONNECT` tunnels. The proxy does not read or 
 `lib/guard.js` runs for every tab:
 
 - refuses a target that is not allowed (403), as the second line of defence;
-- keeps the per-tab request filter (private addresses, local names, non-web schemes, optionally trackers/fonts/images);
+- keeps the per-tab request filter (private addresses, local names, non-web schemes, optionally trackers/fonts/images). `PAGE_FILTER=false` removes this layer only;
+  the egress proxy still enforces the network rules;
 - **switches certificate validation back on.** Prerender turns it off for every tab (`Security.setOverrideCertificateErrors({override:true})`
   and "continue" on every error), so a stock install renders pages behind expired, self-signed or wrong-host certificates. `ALLOW_INVALID_CERTS=true` restores that;
 - dismisses JavaScript dialogs at once and denies downloads.
+
+### The release plugin and the orphan sweep
+
+`lib/release.js` does two jobs. It hands per-request memory back as soon as the answer is built (see Memory below), and it marks each render as clean or not clean.
+A render is clean when it finished without a page-load timeout, without a 5xx answer to one of the page's own requests, and without a browser error. The mark is an internal header that the front server
+reads and removes. The render cache keeps only clean renders.
+
+`lib/orphans.js` handles a page that navigates itself, for example a script that reloads the page about a second after it first loads. Chromium sometimes never
+reports a request that was started just before such a navigation as finished or failed. Prerender counts that request as still open and waits for it until the page-load
+timeout. The orphan sweep gives requests of the old document `NAVIGATION_SETTLE_MS` to report back and then writes them off. The
+[test report](test-report.md#measured-on-a-real-production-site) has the measurements that led to it.
 
 ### The watchdog
 
@@ -99,7 +130,7 @@ still exhaust the heap into 503 answers instead of a crash.
 ### Shutdown
 
 On SIGTERM the front server stops accepting, `/healthz` turns 503, running pages get up to `DRAIN_TIMEOUT_MS` to finish, then the browser is stopped and the process
-exits with code 0 (1 if the drain timed out). `tini -g` is PID 1 and forwards the signal to the whole process group.
+exits with code 0 (1 if the drain timed out). `tini -g` is PID 1 and forwards the signal to the whole process group, so Chromium and its helpers hear the signal too.
 
 ## Files
 

@@ -82,7 +82,7 @@ test('requests made by the page: web content passes, private addresses and odd s
   assert.equal(subrequestBlockReason('not a url', config), 'invalid-url');
 });
 
-test('a host you allow stays reachable even if it is a local name, so a development page can be rendered when you ask for it', () => {
+test('a host on the allow list stays reachable even if it is a local name, so a development page can be rendered on purpose', () => {
   const dev = { allowedHosts: ['localhost'], allowAnyHost: false, blockResources: false };
   assert.equal(subrequestBlockReason('http://localhost:3000/app.js', dev), null);
   assert.equal(subrequestBlockReason('http://127.0.0.1:3000/app.js', dev), 'private-address');
