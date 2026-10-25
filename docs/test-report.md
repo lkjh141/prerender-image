@@ -130,6 +130,26 @@ a request of an old page is given to report back, which only applies when one di
 Output size per page was the same on every repeat: home 132074 bytes, venue 145083, news 94282, toolkit 97698, game 97850. One run of the 24 renders showed two smaller home pages
 (129016 and 131816 bytes); they were not seen again in 14 later renders and were not explained.
 
+**With the render cache** (`CACHE_TTL_S=3600`, image digest `sha256:dcab46ff...`, fresh container, `DIAGNOSTICS=true`):
+
+| test | result |
+|---|---|
+| Six pages (home, venue, news, toolkit, game, contact), three passes one after another | pass 1: all `miss`, 1.96 to 2.78 s, and the contact page 10.2 s. Passes 2 and 3: the five ordinary pages are all `hit`, 1.4 to 3.4 ms, with exactly the bytes of the first render (132074, 145083, 94282, 97698, 97850); the contact page is `miss` at 10.2 s every time, because it never finishes cleanly and is never kept |
+| 30 pages from the sitemap, 4 at a time, twice | round 1: 29 of 30 under 4.5 s, the contact page 10.3 s; round 2: 29 hits, each under 6 ms, the contact page 10.2 s; 0 answers other than 200 |
+| Cache after those runs | 41 hits, 37 misses, 32 pages stored, 3.6 MB (about 110 KB a page), 0 evictions |
+| `page timed out` in the log | 5, all of them the contact page |
+| Requests written off after a self-reload (`wrote off`) | 30 lines; every render that needed it finished cleanly |
+| Container restart | the first request after it `miss`, the second `hit`: a restart empties the cache, which is how a deploy flushes it |
+| Memory | 335 MiB of 2 GiB, 101 processes, 2.5 % CPU when sampled |
+| The 504 seen earlier | not seen in about 80 renders of this build |
+
+**Compared with the community image it replaces:** the home and news pages were byte for byte the same on both; the venue page had the same size and differed only in where one
+`<link rel="modulepreload">` sits in the head (the browser adds it when the script is requested, so its position follows timing).
+
+**In production:** the image was started under the old container's name and port (the old container stopped and renamed, kept for rollback), and the site's own crawler check, `check-prerender.sh`
+through nginx as Googlebot (title, content, canonical, `og:url`, robots tag, sitemap type), passed. Settings used: `ALLOWED_HOSTS` for the site's two host names, `PAGE_LOAD_TIMEOUT_MS=10000`,
+`REQUEST_TIMEOUT_MS=14000`, `CACHE_TTL_S=3600`, `--memory 2g`, read-only root, all capabilities dropped.
+
 **Resources:** after about 110 renders the container used 337 MiB of its 2 GiB (333 MiB after the first 60), 108 processes, and 2.3 to 2.6 % CPU when sampled right after a run.
 
 **What this run found**
@@ -142,7 +162,7 @@ Output size per page was the same on every repeat: home 132074 bytes, venue 1450
    written off. Result: 0 of 20 slow, and the fix fired in 14 of those 20 renders.
 2. **A page with a widget that never finishes.** The contact page (Cloudflare Turnstile) is not finished from Prerender's point of view, because the widget keeps connections open.
    It takes the full page-load timeout: 10.2 s with this image (10 s limit) and 20.2 s with the community image (its 20 s limit). The site-side fix is `window.prerenderReady`.
-3. **One 504 on the home page in about 100 renders under load**, not reproduced in 38 more. The log showed a page-load timeout with one request still counted. Its cause is not known.
+3. **One 504 on the home page in about 100 renders under load**, not reproduced in 38 more, nor in about 80 renders of the build with the cache. The log showed a page-load timeout with one request still counted. Its cause is not known; the web server's fallback to the normal app covers a request like it. Watch `prerender_timeouts_total` in production.
 
 ## Not covered
 
