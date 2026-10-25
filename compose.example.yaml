@@ -1,4 +1,4 @@
-# An example of running the image with the protections the README recommends. Replace the host names with yours.
+# An example of running the image with the protections the README recommends. Replace the host names with the real ones.
 services:
   prerender:
     image: ghcr.io/OWNER/prerender-image@sha256:REPLACE_WITH_THE_DIGEST_YOU_REVIEWED
@@ -10,7 +10,7 @@ services:
       MAX_QUEUE: "32"
       # METRICS_ENABLED: "true"      # Prometheus text on /metrics; keep the port on loopback
     ports:
-      - "127.0.0.1:3000:3000"   # reachable from this machine only; put your web server in front
+      - "127.0.0.1:3000:3000"   # reachable from this machine only; the operator puts a web server in front
     read_only: true
     tmpfs:
       - /tmp:size=512m

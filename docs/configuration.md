@@ -1,7 +1,14 @@
 # Configuration
 
 All configuration is by environment variable. A value that is not valid (not a whole number, outside its range) stops the container with a
-plain message; nothing is silently replaced by a default.
+plain message; nothing is silently replaced by a default. The reason is that a typo should never turn into "no limit". An operator who types
+`MAX_CONCURRENCY=40O` finds out at start-up, not during an outage.
+
+An unset or empty variable uses its default. Two relations between settings are checked at start-up as well: `REQUEST_TIMEOUT_MS` must be larger than
+`PAGE_LOAD_TIMEOUT_MS`, and `TAB_MAX_AGE_MS` must be larger than `REQUEST_TIMEOUT_MS`. Otherwise a slow page would be cut off before it could finish, or the watchdog would
+close tabs that are still in use.
+
+The defaults and ranges below are the ones in `lib/settings.js`. Every setting in that file is listed on this page. `test/settings.test.js` checks the defaults, ranges and relations.
 
 ## What may be rendered
 
@@ -9,10 +16,11 @@ plain message; nothing is silently replaced by a default.
 | --- | --- | --- |
 | `ALLOWED_HOSTS` | none, **required** | Host names that may be rendered, comma separated. Exact names only: no wildcards, ports or schemes. A host listed here may be a private address (a development page). |
 | `ALLOW_ANY_HOST` | `false` | `true` renders any **public** host. Private and local addresses stay refused. |
-| `ALLOW_PRIVATE_TARGETS` | `false` | `true` also lets pages reach private addresses. Only for a network with nothing sensitive on it. |
+| `ALLOW_PRIVATE_TARGETS` | `false` | `true` also lets pages reach private addresses. Only for a network with nothing sensitive on it. This turns off the main protection against server-side request forgery, so it is not for production. |
 | `ALLOW_INVALID_CERTS` | `false` | `true` accepts expired, self-signed and wrong-host certificates (the stock Prerender behaviour). For development only. |
 | `BLOCK_RESOURCES` | `false` | `true` also refuses trackers, ad networks, fonts and images while rendering. Faster pages; the text does not depend on them. |
-| `EGRESS_ALLOWED_PORTS` | `80,443` | Ports a page may reach. A host in `ALLOWED_HOSTS` that resolves to a private address (a development page) may use any port except the service's own; a listed host that resolves to a public address keeps to these ports. If your site runs on another port, add it here. |
+| `EGRESS_ALLOWED_PORTS` | `80,443` | Ports a page may reach. A host in `ALLOWED_HOSTS` that resolves to a private address (a development page) may use any port except the service's own; a listed host that resolves to a public address keeps to these ports. If the site runs on another port, add it here. The reason for the limit is that a listed name which points at the server's own public address
+could otherwise be used to reach services such as SSH on that address. |
 
 ## Where it listens
 
@@ -57,14 +65,17 @@ What is kept, and what is not:
 
 - **Kept:** a plain `200` render that finished cleanly. The cached answer is identical to the answer a render would give (same body, same filtered headers).
 - **Never kept:** a render that hit the page-load timeout, one where a request of the page's own failed with a 5xx answer, one where the browser reported an error, any status other than 200 (so also 404, 301, 5xx), an empty page, and a page whose `Cache-Control` says `no-store` or `private`. A page that always hits the page-load timeout (for example one with a CAPTCHA widget that never finishes) is therefore rendered every time. The fix for such a page is on the site: set `window.prerenderReady = false` early and `true` when the content is there.
+
+The rule behind this list is that a cached answer is served to every caller until it expires. A render that may be incomplete must not be kept, because one bad render would then be repeated for every crawler. A page cannot make its own render count as complete by setting headers: the marker is written by the service after the page's own headers, so it overwrites any value the page set with a `prerender-header` tag, and `X-Prerender-Cache` is set by the front server. `test/adversarial/cache.test.js` has a page that tries this.
 - **Key:** the full URL that is rendered, including the query string. A different query string is a different page. The answer does not depend on who asks: the service sends the browser nothing from the caller's request, so nothing about a caller can end up in a cached page.
+- **Bursts:** while a page is being rendered for the first time, other callers asking for the same page wait for that render instead of starting their own (up to 256 waiting callers per page). When the render is kept they are served from the cache. When it cannot be kept, each waiting caller renders on its own. The counter `prerender_coalesced_total` shows how often this happened.
 - **Eviction:** least recently used first, by bytes and by entries. One page larger than a quarter of `CACHE_MAX_MB` is not kept.
 - **Size:** on a real single-page app, 32 rendered pages (home, venue, news and the like) used 3.6 MB in the cache, about 110 KB each, so the default 64 MB holds roughly 600 pages of that size.
 - **Hits are cheap:** a hit uses no browser, no render slot and no queue place, so it is also served while the service is busy or short of memory. The request is still checked first (URL, host allowlist), so a host that is not allowed never reaches the cache.
 - **Observe:** the `X-Prerender-Cache: hit` or `miss` response header, and with `METRICS_ENABLED=true` the `prerender_cache_*` metrics.
 - **Flush:** restart the container. There is no endpoint to flush it, on purpose: the service has no authentication, so nothing that changes state is exposed.
 
-Choosing the TTL: after a deploy of your site, crawlers see the old render until the entry expires or the container restarts. Restart the container as part of the deploy, or use a TTL that you can live with. Because anyone who can reach the service can request many different query strings on an allowed host, the cache can be filled with junk; the limits keep that bounded and the least recently used entries go first, but it can push useful pages out. Rate-limit at your web server as for the render itself.
+Choosing the TTL: after a deploy of the site, crawlers see the old render until the entry expires or the container restarts. The operator can restart the container as part of the deploy, or pick a TTL that is acceptable for stale content. Because anyone who can reach the service can request many different query strings on an allowed host, the cache can be filled with junk; the limits keep that bounded and the least recently used entries go first, but it can push useful pages out. The operator should rate-limit at the web server, as for the render itself.
 
 ## Housekeeping
 
@@ -84,7 +95,7 @@ Choosing the TTL: after a deploy of your site, crawlers see the old render until
 | `EGRESS_DNS_TTL_MS` | 30000 | 0–600000 | How long a resolved address is reused. |
 | `CHROME_BIN` | `/usr/bin/chromium` | | The browser binary. |
 | `CHROME_JS_HEAP_MB` | 512 | | Cap on one page's JavaScript heap (`--js-flags`). |
-| `CHROME_PROFILE_DIR` | `/tmp/chromium-profile` | | Browser profile directory; keep it on the `/tmp` tmpfs. |
+| `CHROME_PROFILE_DIR` | `/tmp/chromium-profile` | | Browser profile directory; keep it on the `/tmp` tmpfs. Two instances on one machine need different directories, or they fight over the profile lock. |
 
 The image sets `NODE_OPTIONS=--max-old-space-size=384` (the service's own heap) and `UV_THREADPOOL_SIZE=16` (name lookups).
 
@@ -95,13 +106,13 @@ Prerender's own `FOLLOW_REDIRECTS`, `CAPTURE_CONSOLE_LOG`, `ENABLE_SERVICE_WORKE
 ## Sizing
 
 - **Memory.** Browser: about 200 MB idle plus 100–250 MB per page being rendered, so `MAX_CONCURRENCY=4` wants roughly 1–1.2 GB. Service: the
-  heap holds each finished request for a few seconds, about 1–3 MB each, so at 3 pages a second expect 100–200 MB of the 384 MB heap. Above 85 % of the heap, requests are
+  heap holds each finished request for a few seconds, about 1–3 MB each, so at 3 pages a second expect 100–200 MB of the 384 MB heap. Above 85 % of the heap (`HEAP_SHED_PERCENT`), requests are
   turned away rather than risking the process.
-  The example in `compose.example.yaml` uses a 2 GB limit for that reason.
+  The example in `compose.example.yaml` uses a 2 GB limit for that reason. The render cache (`CACHE_MAX_MB`, default 64) is extra and sits outside the Node heap.
 - **CPU.** A page load is bursty, up to one core. Measured on 4 cores: about 3.5 pages a second at `MAX_CONCURRENCY=4`.
 - **Latency.** A simple page takes about 0.75 s, almost all of it the 500 ms quiet period plus the check interval. With `WAIT_AFTER_LAST_REQUEST_MS=200` it takes about 0.45 s.
 - **A real single-page app.** Measured on a 4 vCPU, 8 GB server with a 2 GB container: about 2 s for a page that loads web fonts, an error-reporting library and several API calls (1.75 to 2.35 s over 20 renders), up to 3.7 s each when 4 render at once, and 337 MiB of memory after about 110 renders. See the [test report](test-report.md#measured-on-a-real-production-site). A page with a widget that never finishes loading (a CAPTCHA, a chat widget that holds a connection open) takes the whole `PAGE_LOAD_TIMEOUT_MS`.
-- **Caching.** Put a cache in front (nginx `proxy_cache`, your CDN). Rendering is the expensive part, and a crawler asking for the same page twice should not pay twice.
+- **Caching.** Put a cache in front (nginx `proxy_cache`, a CDN), or use the built-in one (`CACHE_TTL_S`). Rendering is the expensive part, and a crawler asking for the same page twice should not pay twice.
 
 ## Health and metrics
 
