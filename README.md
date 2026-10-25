@@ -113,6 +113,8 @@ They can be reproduced with `test/bots/run.js`, `test/bots/tuning.js` and `BENCH
 | Five page types, 4 renders at once (40 renders) | slowest 3.7 s; 39 of 40 answered 200, 1 answered 504 |
 | Home page, 24 renders, 4 at once | 0 timeouts, slowest 5.7 s |
 | With the render cache (`CACHE_TTL_S=3600`) | first render 2.0 to 2.8 s, every repeat 1.4 to 3.4 ms with the same bytes; the second round over a 30-page sitemap was 29 hits in under 6 ms; 32 pages used 3.6 MB |
+| Burst of 12 callers for one new page, cache on (live server) | 2.3 s with 11 waiting for the first render; the earlier image took 12.6 s |
+| 60 minutes of mixed and hostile load in a separate container with the production limits | 10,802 requests, all 200, 0 wrong; service memory flat at about 205 MB; no growth in descriptors, threads or processes |
 | Swapped in for the community image on the live server | the site's own crawler check (`check-prerender.sh`, through nginx as Googlebot) passed; home and news pages were byte for byte the same as the old image's |
 | Memory after about 110 renders | 337 MiB of the 2 GiB limit |
 
