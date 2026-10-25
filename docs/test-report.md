@@ -136,7 +136,7 @@ the site exactly once, 8,583 answers from the cache, and nothing left in flight 
 at 0 or 2, the browser profile at 8 MB and the cache at its 40-entry limit. Between the first and second halves: service +5 MB, heap -8 MB, browser -53 MB, descriptors -2, processes -2. The script reported one problem, service memory
 86 MB against 277 MB, but its baseline had been taken after only two requests, before the heap and cache filled; the measurement was wrong, not the service. The baseline is now taken after the first minute of load, and a second 12-minute run with the corrected script ended with `SOAK OK`: 5,042 requests, all 200, 0 wrong answers, 63 bursts each asking the site once, 1,764 callers that waited for a first render
 (`prerender_coalesced_total`), service memory 271 to 281 MB (+6 MB between the halves), descriptors 73 to 72, and nothing in flight afterwards.
-A 30-minute run is not a multi-hour run. A longer one belongs on the server, where it can run in a separate container.
+A 30-minute run is not a multi-hour run. A 60-minute run was then done on the server, in a separate container (see "Audit on the live server").
 
 **What this did not cover.** Cloudflare itself cannot be reached from the sandbox. `scripts/server-audit.sh` therefore has a read-only section that sends crawler and odd-path requests through the real public path of the server.
 
@@ -168,6 +168,34 @@ What the live runs showed beyond the sandbox:
   logs the same refusal once a minute with a repeat count.
 - **Production metrics were healthy.** After about a day on the image: 0 timeouts, 0 refused, 0 queue-full, 0 memory shedding, cache hits 14 of 33 lookups, 16 entries (1.6 MB), 150 MiB of
   the 2 GiB limit, 16 orphan write-offs in the log (the fix for requests that a self-reloading page leaves unreported, working as intended).
+
+**Third run, the final image, and a 60-minute soak (2026-10-25).** After the audit fixes and the quieter refusal log were merged, the script was run again against the published image `sha256:a4b53eac…`, followed by
+`scripts/server-soak.js` for 60 minutes in a separate container with the production limits (2 GB, 2 CPUs, 512 processes, read-only root, no capabilities, no published ports; see [server-audit.md](server-audit.md#long-soak-on-the-server)).
+The public-path section of the audit script was left out of this run, so that nothing reached the production container. Neither run had a FAIL line or a problem.
+
+| Check | Result |
+| --- | --- |
+| Production hardening, restarts during the audit, health before and after | all PASS, 0 restarts, healthy |
+| 12 attack requests; hostile page against the private "secret" service | all refused as expected; the secret service was contacted 0 times |
+| Cold render of the real site (132,074 bytes) / cached answer | 2.43 s / 3.0 ms |
+| 12 simultaneous callers for one new page | 2.3 s, 11 coalesced (the old image: 12.6 s) |
+| 300 cached answers one after another (includes the start-up of each `curl`) | 2.90 s (9.7 ms each) |
+| Test container after the load | 2.5% CPU, 213 MiB, 109 pids |
+| Production metrics at the time | 400 requests, 23 rendered, 33 cache hits and 23 misses, 0 timeouts, 0 refused, 0 queue-full, 0 memory shedding, 160 MiB of the 2 GiB limit |
+
+The 60-minute soak (rounds of a burst of 16 callers for one new page, 24 mixed requests including alert, pop-up, endless polling and never-finishing pages, and 40 cached repeats, with a small cache that keeps evicting):
+
+| | |
+| --- | --- |
+| Requests | 10,802 in 61 minutes (135 rounds): 10,802 answered 200, 0 wrong, 0 server errors, 0 with no answer, 0 timeouts, 0 queue-full |
+| Bursts | every burst of 16 callers cost the synthetic site exactly one request; 4,677 callers waited for a first render; 7,357 answers came from the cache |
+| Service memory | 192 MB after the first minute of load, 202 to 210 MB for the rest, 208 MB at the end (+0 MB between the first and second half) |
+| Browser memory | 516 to 884 MB, 598 to 611 MB at the end (-70 MB between the halves); the service plus the browser peaked near 1.1 GB, inside the 2 GB limit |
+| File descriptors, threads, processes | 26 to 46 (29 at the end), 11 throughout, 7 to 11; none grew |
+| Left behind at the end | nothing in flight, nothing queued, no tabs open, cache at its 40-entry limit |
+
+One observation on the production log: 186 of its last 2,000 lines were `egress blocked (port)` lines for `mtalk.google.com:5228` (Chromium's own push-messaging connection). Production was still running the image from before the quieter log,
+which writes the same refusal at most once a minute.
 
 Not covered by the script, by design: anything that would change or restart the production container, and the checks that need the container's process or debugging port.
 
