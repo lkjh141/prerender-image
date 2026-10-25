@@ -68,6 +68,15 @@ jobs:
           echo "CHROME_BIN=$chrome" >> "$GITHUB_ENV"
           "$chrome" --version
 
+      - name: Tools for the TLS and nginx suites (skipped by the tests when missing)
+        run: |
+          missing=""
+          command -v certutil >/dev/null || missing="$missing libnss3-tools"
+          command -v nginx >/dev/null || [ -x /usr/sbin/nginx ] || missing="$missing nginx"
+          if [ -n "$missing" ]; then sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends $missing; fi
+          command -v certutil || true
+          (command -v nginx || ls /usr/sbin/nginx) || true
+
       - name: Run every suite, with the browser (SSRF, response, input, exhaustion)
         run: npm test
 
