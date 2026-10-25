@@ -105,6 +105,37 @@ refusal. The test is in `test/egress.test.js`.
 **Not a flaw, but worth knowing.** `/metrics` (when `METRICS_ENABLED=true`) is served on the same port as the renders. Keep that port on `127.0.0.1` or block `/metrics` in the web
 server, so that only the monitoring system can read it.
 
+## Audit on the live server
+
+`scripts/server-audit.sh` (see [server-audit.md](server-audit.md)) was run on the production server: Ubuntu, 4 vCPU, 8 GB, with ufw allowing ports 80 and 443 only from Cloudflare and
+localhost, and redis and mongodb on loopback. The production container was only inspected. All attacks and load ran in throw-away `pt-*` containers (2 CPUs, 1 GB, port 3902) that were
+removed afterwards. The run was done twice, on 2026-10-25: first against the image production was running (`sha256:8df698f3…`, before the audit fixes), then against the image built from
+the audit fixes (`sha256:c56d20c8…`). Neither run had a FAIL line.
+
+| Check | Image before the fixes | Image with the fixes |
+| --- | --- | --- |
+| Production container hardening (unprivileged user, read-only root, no capabilities, no new privileges, memory and pids limits, published on `127.0.0.1` only, 0 restarts) | all PASS | all PASS (same container) |
+| 12 attack requests (host not allowed, private and loopback literals, IPv4-mapped metadata address, user-info trick, `file:`, bad escape, control character, POST, long URL, error-page leaks, version headers) | all refused as expected | all refused as expected |
+| Hostile page trying to reach a private "secret" service by `fetch`, image, WebSocket, metadata address and numeric and IPv6 spellings | page rendered, secret service contacted 0 times | page rendered, secret service contacted 0 times |
+| Cold render of the real site (132,074 bytes) | 2.42 s | 2.52 s |
+| Cached answer of the same page | 2.8 ms | 1.9 ms |
+| 12 simultaneous callers for one new page | 12.6 s | 2.5 s, 11 of them waited for the first render (`prerender_coalesced_total` 11) |
+| 300 cached answers one after another (includes the start-up of each `curl`) | 2.93 s | 2.98 s |
+| Test container after the load | 1.9% CPU, 252 MiB, 99 pids | 1.9% CPU, 215 MiB, 112 pids |
+| Health after the load, slots left taken, production restarts during the audit | 200, 0, 0 | 200, 0, 0 |
+
+What the live runs showed beyond the sandbox:
+
+- **The burst flaw was real on the live server.** With the old image, 12 callers for one new page took 12.6 s because each one rendered the page. With the fix the same burst took 2.5 s,
+  about one render, and 11 callers were served after waiting for it.
+- **Chromium's own refusals fill the log.** The production log held 56 (first run) and 81 (second run) `egress blocked (port)` lines in 2,000 lines, all for `mtalk.google.com:5228`,
+  Chromium's push-messaging connection. Refusing it is correct. See the finding above: four browser flags were tested in the sandbox and none was safe to ship, so the egress proxy now
+  logs the same refusal once a minute with a repeat count.
+- **Production metrics were healthy.** After about a day on the image: 0 timeouts, 0 refused, 0 queue-full, 0 memory shedding, cache hits 14 of 33 lookups, 16 entries (1.6 MB), 150 MiB of
+  the 2 GiB limit, 16 orphan write-offs in the log (the fix for requests that a self-reloading page leaves unreported, working as intended).
+
+Not covered by the script, by design: anything that would change or restart the production container, and the checks that need the container's process or debugging port.
+
 ## Measured results
 
 4-core sandbox, Chromium 141 (Playwright's build; the Alpine image uses Alpine's), Node 22. Latency is wall clock from the caller.
