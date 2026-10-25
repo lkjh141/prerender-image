@@ -54,7 +54,7 @@ test('renders a script-built page, honours the status meta tag, refuses other ho
   });
   const sitePort = await listen(site);
 
-  const servicePort = 20000 + Math.floor(Math.random() * 20000);
+  const servicePort = 20000 + Math.floor(Math.random() * 12000); // below the range of outgoing connections
   const child = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], {
     env: { ...process.env, PORT: String(servicePort), CHROME_BIN: chrome, ALLOWED_HOSTS: '127.0.0.1', BROWSER_DEBUGGING_PORT: String(servicePort + 1), LOG_REQUESTS: 'false' },
     stdio: ['ignore', 'pipe', 'pipe'],

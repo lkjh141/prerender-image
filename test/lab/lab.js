@@ -30,7 +30,23 @@ function listen(server, host = '127.0.0.1', port = 0) {
   });
 }
 
-function randomPort() { return 20000 + Math.floor(Math.random() * 30000); }
+// Test ports are taken below Linux's range for outgoing connections (32768 and up): a port in that range can already be held by one of the
+// many connections a run makes, which made a start-up fail now and then with EADDRINUSE. The pair (service, browser debugging) is also checked.
+function randomPort() { return 20000 + Math.floor(Math.random() * 12000); }
+function bindable(port) {
+  return new Promise(resolve => {
+    const probe = net.createServer();
+    probe.once('error', () => resolve(false));
+    probe.listen(port, '0.0.0.0', () => probe.close(() => resolve(true)));
+  });
+}
+async function freePortPair() {
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const port = randomPort();
+    if (await bindable(port) && await bindable(port + 1)) return port;
+  }
+  throw new Error('no free pair of ports for the service');
+}
 
 /** One request to the service (or any URL). Never throws: errors come back as { error }. */
 function request(target, { method = 'GET', headers = {}, body = null, timeout = 90000, raw = false } = {}) {
@@ -104,6 +120,8 @@ class Service {
 
   async start() {
     if (this.external) return this;
+    this.servicePort = await freePortPair();
+    this.debugPort = this.servicePort + 1;
     this.child = spawn(process.execPath, [path.join(ROOT, 'server.js')], {
       env: {
         PATH: process.env.PATH, HOME: process.env.HOME, CHROME_BIN: CHROME,
