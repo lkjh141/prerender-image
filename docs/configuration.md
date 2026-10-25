@@ -43,6 +43,28 @@ plain message; nothing is silently replaced by a default.
 | `MAX_CONNECTIONS` | 512 | 1–10000 | Open client connections. |
 | `HEAP_SHED_PERCENT` | 85 | 50–99 | New requests get 503 while the Node heap is above this percent of its limit. |
 
+## Render cache (optional, off by default)
+
+A finished render can be kept in memory and served again without a browser. Set `CACHE_TTL_S` to switch it on.
+
+| Variable | Default | Range | Meaning |
+| --- | --- | --- | --- |
+| `CACHE_TTL_S` | 0 (off) | 0–604800 | Seconds a render is kept. `0` means no cache. |
+| `CACHE_MAX_MB` | 64 | 1–1024 | Memory the cache may use. It is outside the Node heap and counts against the container's memory limit, so add it to the sizing below. |
+| `CACHE_MAX_ENTRIES` | 2000 | 1–100000 | Pages the cache may hold. |
+
+What is kept, and what is not:
+
+- **Kept:** a plain `200` render that finished cleanly. The cached answer is identical to the answer a render would give (same body, same filtered headers).
+- **Never kept:** a render that hit the page-load timeout, one where a request of the page's own failed with a 5xx answer, one where the browser reported an error, any status other than 200 (so also 404, 301, 5xx), an empty page, and a page whose `Cache-Control` says `no-store` or `private`. A page that always hits the page-load timeout (for example one with a CAPTCHA widget that never finishes) is therefore rendered every time. The fix for such a page is on the site: set `window.prerenderReady = false` early and `true` when the content is there.
+- **Key:** the full URL that is rendered, including the query string. A different query string is a different page. The answer does not depend on who asks: the service sends the browser nothing from the caller's request, so nothing about a caller can end up in a cached page.
+- **Eviction:** least recently used first, by bytes and by entries. One page larger than a quarter of `CACHE_MAX_MB` is not kept.
+- **Hits are cheap:** a hit uses no browser, no render slot and no queue place, so it is also served while the service is busy or short of memory. The request is still checked first (URL, host allowlist), so a host that is not allowed never reaches the cache.
+- **Observe:** the `X-Prerender-Cache: hit` or `miss` response header, and with `METRICS_ENABLED=true` the `prerender_cache_*` metrics.
+- **Flush:** restart the container. There is no endpoint to flush it, on purpose: the service has no authentication, so nothing that changes state is exposed.
+
+Choosing the TTL: after a deploy of your site, crawlers see the old render until the entry expires or the container restarts. Restart the container as part of the deploy, or use a TTL that you can live with. Because anyone who can reach the service can request many different query strings on an allowed host, the cache can be filled with junk; the limits keep that bounded and the least recently used entries go first, but it can push useful pages out. Rate-limit at your web server as for the render itself.
+
 ## Housekeeping
 
 | Variable | Default | Range | Meaning |
