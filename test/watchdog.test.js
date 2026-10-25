@@ -57,7 +57,7 @@ test('the browser is restarted when it uses too much memory: when idle above the
   const own = treeRssMb(process.pid);
   try {
     assert.ok(own > 100 && hog.length > 0, `this process uses ${own} MB`);
-    const mk = limit => createWatchdog({ server, debugPort: b.port, settings: { TAB_MAX_AGE_MS: 1e6, BROWSER_MAX_RSS_MB: limit, BROWSER_DOWN_EXIT_S: 60, BROWSER_RECYCLE_COOLDOWN_S: 0 }, exit: () => {} });
+    const mk = limit => createWatchdog({ server, debugPort: b.port, settings: { TAB_MAX_AGE_MS: 1e6, BROWSER_MAX_RSS_MB: limit, BROWSER_DOWN_EXIT_S: 60, BROWSER_RECYCLE_COOLDOWN_S: 0 }, exit: () => {}, minBrowserAgeMs: 0 });
     await mk(Math.floor(own * 0.75)).tick(); // above the limit but busy, and not above twice the limit
     assert.equal(restarts, 0, 'a busy browser is left alone below twice the limit');
     server.browserRequestsInFlight = new Map();
@@ -89,4 +89,29 @@ test('the process exits when no browser comes back, not before', async () => {
     await wd.tick();
     assert.equal(exited, 1);
   } finally { await b.stop(); }
+});
+
+test('a browser that has only just started is never recycled for memory, however far over the limit; a new browser process starts the clock again', async () => {
+  const { spawn } = require('node:child_process');
+  const b = await fakeBrowser(() => []);
+  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+  let restarts = 0;
+  const server = { browser: { chromeChild: { pid: process.pid } }, isBrowserConnected: true, browserRequestsInFlight: new Map(), restartBrowser: () => { restarts += 1; } };
+  try {
+    await sleep(300); // let the child process start so it has a measurable size
+    assert.ok(treeRssMb(child.pid) > 5 && treeRssMb(process.pid) > 5);
+    const wd = createWatchdog({ server, debugPort: b.port, settings: { TAB_MAX_AGE_MS: 1e6, BROWSER_MAX_RSS_MB: 1, BROWSER_DOWN_EXIT_S: 60, BROWSER_RECYCLE_COOLDOWN_S: 0 }, exit: () => {}, minBrowserAgeMs: 400 });
+    await wd.tick();
+    await wd.tick();
+    assert.equal(restarts, 0, 'far over the limit but only just seen: left alone');
+    await sleep(450);
+    await wd.tick();
+    assert.equal(restarts, 1, 'once it has been running long enough it is recycled');
+    server.browser.chromeChild = { pid: child.pid }; // a different process: a new browser, also over the limit
+    await wd.tick();
+    assert.equal(restarts, 1, 'the new browser process starts its own clock');
+    await sleep(450);
+    await wd.tick();
+    assert.equal(restarts, 2, 'and is recycled once it is old enough');
+  } finally { child.kill('SIGKILL'); await b.stop(); }
 });
