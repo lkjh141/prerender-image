@@ -12,7 +12,7 @@ plain message; nothing is silently replaced by a default.
 | `ALLOW_PRIVATE_TARGETS` | `false` | `true` also lets pages reach private addresses. Only for a network with nothing sensitive on it. |
 | `ALLOW_INVALID_CERTS` | `false` | `true` accepts expired, self-signed and wrong-host certificates (the stock Prerender behaviour). For development only. |
 | `BLOCK_RESOURCES` | `false` | `true` also refuses trackers, ad networks, fonts and images while rendering. Faster pages; the text does not depend on them. |
-| `EGRESS_ALLOWED_PORTS` | `80,443` | Ports a page may reach on hosts that are not in `ALLOWED_HOSTS`. |
+| `EGRESS_ALLOWED_PORTS` | `80,443` | Ports a page may reach. A host in `ALLOWED_HOSTS` that resolves to a private address (a development page) may use any port except the service's own; a listed host that resolves to a public address keeps to these ports. If your site runs on another port, add it here. |
 
 ## Where it listens
 
