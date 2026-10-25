@@ -77,6 +77,7 @@ Prerender's own `FOLLOW_REDIRECTS`, `CAPTURE_CONSOLE_LOG`, `ENABLE_SERVICE_WORKE
   The example in `compose.example.yaml` uses a 2 GB limit for that reason.
 - **CPU.** A page load is bursty, up to one core. Measured on 4 cores: about 3.5 pages a second at `MAX_CONCURRENCY=4`.
 - **Latency.** A simple page takes about 0.75 s, almost all of it the 500 ms quiet period plus the check interval. With `WAIT_AFTER_LAST_REQUEST_MS=200` it takes about 0.45 s.
+- **A real single-page app.** Measured on a 4 vCPU, 8 GB server with a 2 GB container: about 2 s for a page that loads web fonts, an error-reporting library and several API calls (1.75 to 2.35 s over 20 renders), up to 3.7 s each when 4 render at once, and 337 MiB of memory after about 110 renders. See the [test report](test-report.md#measured-on-a-real-production-site). A page with a widget that never finishes loading (a CAPTCHA, a chat widget that holds a connection open) takes the whole `PAGE_LOAD_TIMEOUT_MS`.
 - **Caching.** Put a cache in front (nginx `proxy_cache`, your CDN). Rendering is the expensive part, and a crawler asking for the same page twice should not pay twice.
 
 ## Health and metrics

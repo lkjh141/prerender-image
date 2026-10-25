@@ -96,6 +96,17 @@ Reproduce with `test/bots/run.js`, `test/bots/tuning.js` and `BENCH=1 node --tes
 | Overload | queue of 32, then immediate 503; nginx falls back to the normal app |
 | Long run | 300 mixed renders (10 % hostile pages): 0 failures, heap flat, file descriptors and processes flat, one browser |
 
+**On a real production site** (a React single-page app behind Cloudflare, rendered on a 4 vCPU, 8 GB server in a 2 GB container; details in the [test report](docs/test-report.md#measured-on-a-real-production-site))
+
+| | |
+|---|---|
+| One page after another (home page, 20 renders) | 1.75 to 2.35 s, mean 2.0 s, none reached the 10 s page-load timeout |
+| Against the community image it replaces (10 pairs) | 2.12 s mean against 1.83 s: about 0.3 s slower on an uncached page |
+| Five page types, 4 renders at once (40 renders) | slowest 3.7 s; 39 of 40 answered 200, 1 answered 504 |
+| Home page, 24 renders, 4 at once | 0 timeouts, slowest 5.7 s |
+| Memory after about 110 renders | 337 MiB of the 2 GiB limit |
+| A page with a widget that never finishes (Turnstile) | the full page-load timeout, 10.2 s; the community image waited 20.2 s. Set `window.prerenderReady` on such a page |
+
 **What it protects against** (each reproduced first, see the [test report](docs/test-report.md)): bad certificates being accepted, four ways
 around a page-level SSRF filter, stack traces in error pages, an `alert()` loop ending the process, memory growth that ran the stock service out of memory after
 about 100 pages, a frozen browser going unnoticed, cookies and security headers copied from the rendered site, script tags left on 404 pages.
