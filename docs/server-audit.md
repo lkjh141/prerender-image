@@ -32,3 +32,16 @@ bash scripts/server-audit.sh prerender 3910  # another test port
 
 The output has `PASS`, `FAIL` and `INFO` lines. A `FAIL` line names what to fix. Nothing is fixed automatically. The site checked can be changed with `AUDIT_SITE_HOSTS` and
 `AUDIT_REAL_URL`.
+
+## Results so far
+
+The first two runs, on the production server, are in the [test report](test-report.md#audit-on-the-live-server). Both ended with no FAIL line. The script has one known limit: it
+tests the image that the production container uses. To test a newer image before the swap, point the `IMAGE_ID=` line at its digest, for example:
+
+```sh
+NEW=ghcr.io/lkjh141/prerender-image@sha256:<digest>
+docker pull $NEW && sed "s|^IMAGE_ID=.*|IMAGE_ID=$NEW|" scripts/server-audit.sh > /tmp/server-audit-new.sh && bash /tmp/server-audit-new.sh prerender 3902
+```
+
+The "image id" line in section 1 then shows the new digest, while the hardening checks still describe the `prerender` container.
+
