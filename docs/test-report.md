@@ -93,7 +93,7 @@ on their own, so a page that cannot be cached behaves as before. Callers that le
 
 **Measured on the sandbox after these changes.** Cached answers: 20,000 requests at 64 connections in 2.3 s (about 8,700 per second, measured with a Node client that was itself the limit),
 p50 6.3 ms, p99 22 ms, no wrong answers. During a flood of 200 different new URLs, `/healthz` still answered in 0.6 ms, 36 renders finished and 164 requests were turned away with 503
-at once. The full suite, with the browser suites, ran 156 tests: 155 passed, 0 failed, 1 skipped (a test that needs the container).
+at once. The full suite, with the browser suites, ran 156 tests (176 after the TLS and nginx suites were added): 155 passed, 0 failed, 1 skipped (a test that needs the container).
 
 **Finding on the live server: repeated log lines from the browser itself.** The audit script run on the production server found 56 `egress blocked (port)` lines in 2,000 log lines, all for
 `mtalk.google.com:5228`. That is Chromium's own push-messaging connection, which the egress proxy rightly refuses because port 5228 is not allowed. It does no harm, but it hides real
@@ -104,6 +104,41 @@ refusal. The test is in `test/egress.test.js`.
 
 **Not a flaw, but worth knowing.** `/metrics` (when `METRICS_ENABLED=true`) is served on the same port as the renders. Keep that port on `127.0.0.1` or block `/metrics` in the web
 server, so that only the monitoring system can read it.
+
+## Gaps closed after the audit: TLS, nginx, DNS rebinding and a long soak
+
+The audit report listed four things it had not tested. They were tested on 2026-10-25.
+
+**TLS against many kinds of server** (`test/adversarial/tls.test.js`, 14 tests). A throw-away certificate authority is created and trusted by the browser in a private certificate store (a temporary `HOME`), so each
+defect can be tested alone. A good chain must render, and everything Chromium should reject must not return the page it served.
+
+| Server | Result |
+| --- | --- |
+| Trusted chain; trusted chain through an intermediate that the server sends; HTTP/2; TLS 1.2 only; TLS 1.3 only | rendered (200) |
+| Expired; not yet valid; certificate for another name; self-signed; chain from an authority that is not trusted; intermediate missing from the chain; TLS 1.0 only; TLS 1.1 only | refused, page not returned |
+
+The first group is the control: if the trust store did not work, every row would be refused. A run against the public `badssl.com` test hosts was also tried and is not used as evidence: the sandbox network re-signs
+HTTPS traffic with its own gateway certificate and answers some hosts itself, so those results do not show what the service does. One thing it did show, which is also true of ordinary Chrome: a revoked certificate is
+accepted (Chromium does not check revocation online), and so is a "pinning" test host. The service adds no revocation check.
+
+**nginx in front** (`test/adversarial/nginx.test.js`, 5 tests, skipped when nginx is not installed). A real nginx runs the logic of `docs/nginx.example.conf` (plain http and local ports instead of the public address).
+A crawler gets the rendered page and a visitor gets the app shell. Query strings reach the page. A file with an extension is served as a file. A request from the service's own browser (user agent with "Prerender") gets the shell
+instead of another render. Twelve odd request targets (absolute-form URL, userinfo, double slash, encoded `@`, backslash, `..%2f`, injected line breaks, a fragment, `*`) and spoofed `Host`, `X-Forwarded-Host`, a second `Host` header
+and a trailing-dot host never reached the private test service, and the site only received the paths nginx should produce. When the service is down, crawlers still get the app shell.
+
+**Public DNS rebinding** (`test/manual/dns-rebinding.js`, needs root). A real DNS server answers names under `rebind.test` with a public address and a private one in turn (time to live 0). An allowed page asks for 12 such names, 6 times
+each, as fetches and as images. In all three orders (public first, private first, private both times) the private web server received 0 requests over about 40 changing answers each. The egress proxy resolves a name once, refuses
+it if any answer is private, and connects to the address it checked, so the second answer is never seen. It is a manual script, because it listens on UDP port 53 and rewrites `/etc/resolv.conf` for the duration.
+
+**A long soak under the burst and cache code** (`test/manual/burst-soak.js`, `SOAK_MINUTES`, default 30). The cache is on with a small limit so it keeps evicting. Each round has a burst of 16 callers for one new page, 24 mixed requests
+(including pages that alert, open pop-ups, poll forever or never finish) and 40 repeat requests. The first run lasted 30 minutes: 12,562 requests, all answered 200, 0 wrong answers, 0 server errors, 157 bursts and each burst asked
+the site exactly once, 8,583 answers from the cache, and nothing left in flight or queued afterwards. After the first minute of warm-up, service memory stayed at 265 to 280 MB, file descriptors at 72 to 75, browser processes at 6 to 10, tabs
+at 0 or 2, the browser profile at 8 MB and the cache at its 40-entry limit. Between the first and second halves: service +5 MB, heap -8 MB, browser -53 MB, descriptors -2, processes -2. The script reported one problem, service memory
+86 MB against 277 MB, but its baseline had been taken after only two requests, before the heap and cache filled; the measurement was wrong, not the service. The baseline is now taken after the first minute of load, and a second 12-minute run with the corrected script ended with `SOAK OK`: 5,042 requests, all 200, 0 wrong answers, 63 bursts each asking the site once, 1,764 callers that waited for a first render
+(`prerender_coalesced_total`), service memory 271 to 281 MB (+6 MB between the halves), descriptors 73 to 72, and nothing in flight afterwards.
+A 30-minute run is not a multi-hour run. A longer one belongs on the server, where it can run in a separate container.
+
+**What this did not cover.** Cloudflare itself cannot be reached from the sandbox. `scripts/server-audit.sh` therefore has a read-only section that sends crawler and odd-path requests through the real public path of the server.
 
 ## Audit on the live server
 

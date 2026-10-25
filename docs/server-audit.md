@@ -20,7 +20,8 @@
    The secret service logs every hit. The expected number is 0.
 4. Timings on the real site: a cold render, a cached answer, 12 simultaneous callers for one new page, 300 cached answers in a row, cache size, and the test container's CPU and
    memory.
-5. A last look at production: it must still answer `/healthz` and must not have restarted.
+5. The public path (read-only requests to the site itself): a crawler must get a larger, rendered answer than a visitor, seven odd paths (double slash, `@`, encoded `..`, a NUL byte, an injected header, a query holding the metadata address) must never give a 5xx, sensitive content or an injected header, and the headers Cloudflare and nginx add are listed. Set `AUDIT_PUBLIC_URL` to use another address than `AUDIT_REAL_URL`.
+6. A last look at production: it must still answer `/healthz` and must not have restarted.
 
 ## How to run it
 

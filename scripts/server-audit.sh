@@ -137,7 +137,28 @@ check "health still fine after the load" "200" "$(code "$B/healthz" 5)"
 check "no slot left taken" "0" "$(metric prerender_in_flight)"
 
 echo
-echo "== 6. Production again (it must be unchanged) =="
+echo "== 6. The public path (Cloudflare and nginx in front of production), read-only requests to your own site =="
+PUB="${AUDIT_PUBLIC_URL:-$REAL_URL}"
+BOT='Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)'
+VIS='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/141.0 Safari/537.36'
+bot=$(curl -s -D /tmp/pt-bot.h -o /tmp/pt-bot.b -w '%{http_code} %{size_download}B %{time_total}s' --max-time 40 -A "$BOT" "$PUB")
+vis=$(curl -s -o /tmp/pt-vis.b -w '%{http_code} %{size_download}B %{time_total}s' --max-time 40 -A "$VIS" "$PUB")
+info "crawler (Googlebot) gets: $bot"
+info "visitor gets:            $vis"
+[ "$(wc -c < /tmp/pt-bot.b)" -gt "$(wc -c < /tmp/pt-vis.b)" ] && pass "the crawler answer is larger than the app shell, so it was rendered" || fail "the crawler answer is not larger than the app shell: is prerendering reaching crawlers?"
+info "headers the crawler sees: $(grep -i -E '^(server|cf-cache-status|x-robots-tag|x-prerender-cache|cache-control|content-type):' /tmp/pt-bot.h | tr -d '\r' | tr '\n' ' ')"
+grep -qi '^x-injected' /tmp/pt-bot.h && fail "an injected header came back" || pass "no injected header in the crawler answer"
+base="${PUB%/}"
+for odd in '//127.0.0.1/' '/@169.254.169.254/' '/..%2f..%2f..%2fetc%2fpasswd' '/%00' '/%0d%0aX-Injected:%20yes' '/?u=http://169.254.169.254/latest/meta-data/' '/%2e%2e/%2e%2e/etc/passwd'; do
+  c=$(curl -s --path-as-is -o /tmp/pt-odd.b -D /tmp/pt-odd.h -w '%{http_code}' --max-time 40 -A "$BOT" "${base}${odd}")
+  if [ "${c:0:1}" = 5 ]; then fail "odd path ${odd} gave $c"; else pass "odd path ${odd} gave $c"; fi
+  grep -q -E 'root:x:|ami-id|instance-id' /tmp/pt-odd.b && fail "odd path ${odd} returned sensitive-looking content"
+  grep -qi '^x-injected' /tmp/pt-odd.h && fail "odd path ${odd} injected a header"
+done
+rm -f /tmp/pt-bot.h /tmp/pt-bot.b /tmp/pt-vis.b /tmp/pt-odd.b /tmp/pt-odd.h
+
+echo
+echo "== 7. Production again (it must be unchanged) =="
 if [ -n "$HOSTPORT" ]; then check "production /healthz still answers" "200" "$(code "http://127.0.0.1:$HOSTPORT/healthz" 5)"; fi
 check "production did not restart during the audit" "$RESTARTS0" "$(docker inspect --format '{{.RestartCount}}' "$PROD")"
 
