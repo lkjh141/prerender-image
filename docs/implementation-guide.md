@@ -29,6 +29,7 @@ Start from [`compose.example.yaml`](../compose.example.yaml). The settings that 
 | `ports: "127.0.0.1:3000:3000"` | Reachable from this machine only. Your web server runs next to it. |
 | `read_only`, `tmpfs: /tmp`, `cap_drop: [ALL]`, `no-new-privileges` | The container is the security boundary because Chromium runs without its own sandbox. |
 | `mem_limit: 1g`, `pids_limit` | One render uses a few hundred MB; a runaway page must not take the host down. A rule of thumb, not a measurement: watch `docker stats` under your own traffic and adjust. |
+| `CACHE_TTL_S` | Optional. Seconds a finished render is kept in memory and served again without a browser (default `0`, off). A few milliseconds per hit instead of about 2 s for a real single-page app. Only clean `200` renders are kept; see [configuration](configuration.md#render-cache-optional-off-by-default). |
 | image pinned by `@sha256:...` | You decide when the image changes. See "Operate" below. |
 
 Check that it started and is healthy:
@@ -139,6 +140,28 @@ gh attestation verify oci://ghcr.io/lkjh141/prerender-image@sha256:<digest> --re
 (`refused a request for a host that is not allowed`) and requests blocked inside the page (`blocked a request made by the page`). Both are
 useful: the first shows probing, the second shows a page that tries to reach a private address.
 
+**Caching and deploys.** With `CACHE_TTL_S` set, a crawler can see the page as it was before your latest release until the entry expires. Restart the container as the last step of your deploy
+(`docker restart prerender`); a restart empties the cache, and the first request after it is rendered again. There is deliberately no flush endpoint, because the service has no authentication.
+Check that it works with `curl -sI http://127.0.0.1:3000/https://your-site/ | grep -i x-prerender-cache`: `miss` the first time, `hit` the second.
+
+**Replacing a community image on a running server.** This is the procedure that was used on the StageRage server, and it can be undone in seconds.
+
+1. Run the new image next to the old one on a second port with your real settings, and compare. Use the same `ALLOWED_HOSTS` as production, give it `--memory 2g`, and render a few of your own pages:
+   `curl -s http://127.0.0.1:3003/https://your-site/news` against the old container's port. The pages should be the same size and have the same title, canonical and robots tags.
+2. Stop and rename the old container, then start the new one under the old name and port, so nothing else has to change:
+   ```sh
+   docker stop prerender && docker rename prerender prerender-old
+   docker run -d --name prerender --restart unless-stopped -p 127.0.0.1:3002:3000 \
+     --log-opt max-size=10m --log-opt max-file=3 \
+     --read-only --tmpfs /tmp:size=512m --cap-drop ALL --security-opt no-new-privileges:true \
+     --pids-limit 512 --memory 2g \
+     -e ALLOWED_HOSTS=your-site,www.your-site -e CACHE_TTL_S=3600 \
+     ghcr.io/lkjh141/prerender-image@sha256:<digest>
+   ```
+   While the port is down, a web server set up as in section 3 falls back to the normal app, so visitors see no error.
+3. Run your own check through the web server, as a crawler (for StageRage, `scripts/check-prerender.sh`).
+4. Roll back at any time with `docker rm -f prerender && docker rename prerender-old prerender && docker start prerender`. Remove the old container (`docker rm prerender-old`) only after the new one has run cleanly for a day.
+
 **Do not expose it.** The service has no authentication. It listens on loopback in the examples for that reason.
 
 ## 6. Kubernetes
@@ -206,6 +229,8 @@ resolved by the browser.
 | The container exits at once | `ALLOWED_HOSTS` is missing or contains something that is not a plain host name (a port, a scheme, a wildcard). The log line says which. |
 | `403` for a page of your own site | The host is not in `ALLOWED_HOSTS`, or you passed the wrong host (for example `www.` when only the bare name is listed). The log shows the refused address. |
 | The page comes back with an empty root element | The page was not finished when the service took its snapshot. Use `window.prerenderReady`, or raise `WAIT_AFTER_LAST_REQUEST_MS` / `PAGE_LOAD_TIMEOUT_MS`. |
+| One page always takes the whole `PAGE_LOAD_TIMEOUT_MS`, the others about 2 s | The page has something that never finishes loading (a CAPTCHA widget, a chat widget that holds a connection open, a long-polling request). The answer is still complete, only late. Set `window.prerenderReady = false` early and `true` once the content is there; the service then answers at once. Such a page is never kept by the cache, because it did not finish cleanly. |
+| Renders end at the page-load timeout, `page timed out ... requestsInFlight=1` in the log | A request is still counted as running. If the page reloads itself, the request of the old page may never be reported by the browser; the service writes those off after `NAVIGATION_SETTLE_MS` (`wrote off ... request(s) of the previous document` in the log). If the page does not reload itself, look in the log for which request never finishes. |
 | `504` | The render failed or timed out. Check that the service can reach your site, and that the page finishes loading. |
 | A part of the page is missing | The page loads it from a private address or a non-web scheme, which is blocked. Put that host in `ALLOWED_HOSTS` only if it is meant to be reached. |
 | Square boxes instead of text | A language needs a font the image does not contain. Open an issue, or add the package to the Dockerfile. |
@@ -220,7 +245,7 @@ resolved by the browser.
 and scanning it today lists dozens of known vulnerabilities in its operating-system packages and bundled Node packages. This image is rebuilt from
 scratch every week.
 
-**Does it cache?** No. Cache in your web server or CDN (for example nginx `proxy_cache` on `/__prerender`) if your traffic needs it.
+**Does it cache?** Optionally. Set `CACHE_TTL_S` (seconds) and a clean `200` render is kept in memory (up to `CACHE_MAX_MB`, 64 by default, and `CACHE_MAX_ENTRIES`) and served again without a browser, in a few milliseconds. It is off by default. Renders that timed out or had a failing request are never kept. You can also cache in your web server or CDN (for example nginx `proxy_cache`); the two work together.
 
 **Can I render other people's sites?** It is not designed for that. The allowlist exists so the service renders only what you run. `ALLOW_ANY_HOST=true`
 turns it off, and then the service must sit on a network where nothing sensitive is reachable.

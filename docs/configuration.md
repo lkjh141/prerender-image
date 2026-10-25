@@ -59,6 +59,7 @@ What is kept, and what is not:
 - **Never kept:** a render that hit the page-load timeout, one where a request of the page's own failed with a 5xx answer, one where the browser reported an error, any status other than 200 (so also 404, 301, 5xx), an empty page, and a page whose `Cache-Control` says `no-store` or `private`. A page that always hits the page-load timeout (for example one with a CAPTCHA widget that never finishes) is therefore rendered every time. The fix for such a page is on the site: set `window.prerenderReady = false` early and `true` when the content is there.
 - **Key:** the full URL that is rendered, including the query string. A different query string is a different page. The answer does not depend on who asks: the service sends the browser nothing from the caller's request, so nothing about a caller can end up in a cached page.
 - **Eviction:** least recently used first, by bytes and by entries. One page larger than a quarter of `CACHE_MAX_MB` is not kept.
+- **Size:** on a real single-page app, 32 rendered pages (home, venue, news and the like) used 3.6 MB in the cache, about 110 KB each, so the default 64 MB holds roughly 600 pages of that size.
 - **Hits are cheap:** a hit uses no browser, no render slot and no queue place, so it is also served while the service is busy or short of memory. The request is still checked first (URL, host allowlist), so a host that is not allowed never reaches the cache.
 - **Observe:** the `X-Prerender-Cache: hit` or `miss` response header, and with `METRICS_ENABLED=true` the `prerender_cache_*` metrics.
 - **Flush:** restart the container. There is no endpoint to flush it, on purpose: the service has no authentication, so nothing that changes state is exposed.
@@ -99,6 +100,7 @@ Prerender's own `FOLLOW_REDIRECTS`, `CAPTURE_CONSOLE_LOG`, `ENABLE_SERVICE_WORKE
   The example in `compose.example.yaml` uses a 2 GB limit for that reason.
 - **CPU.** A page load is bursty, up to one core. Measured on 4 cores: about 3.5 pages a second at `MAX_CONCURRENCY=4`.
 - **Latency.** A simple page takes about 0.75 s, almost all of it the 500 ms quiet period plus the check interval. With `WAIT_AFTER_LAST_REQUEST_MS=200` it takes about 0.45 s.
+- **A real single-page app.** Measured on a 4 vCPU, 8 GB server with a 2 GB container: about 2 s for a page that loads web fonts, an error-reporting library and several API calls (1.75 to 2.35 s over 20 renders), up to 3.7 s each when 4 render at once, and 337 MiB of memory after about 110 renders. See the [test report](test-report.md#measured-on-a-real-production-site). A page with a widget that never finishes loading (a CAPTCHA, a chat widget that holds a connection open) takes the whole `PAGE_LOAD_TIMEOUT_MS`.
 - **Caching.** Put a cache in front (nginx `proxy_cache`, your CDN). Rendering is the expensive part, and a crawler asking for the same page twice should not pay twice.
 
 ## Health and metrics

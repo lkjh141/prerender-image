@@ -89,6 +89,81 @@ Soak: 300 renders in about 90 to 112 s (2.7 to 3.3 per second including hostile 
 (0 of 12 at the default); with `window.prerenderReady` it is 12 of 12 at every setting, from 100 ms to 500 ms. With the signal set, the quiet period can be lowered to 200 ms safely. Stock
 polling every 500 ms captured the late content by luck of timing (12 of 12), which is not something to rely on, so the default polls every 100 ms and the signal is the documented answer.
 
+## Measured on a real production site
+
+The suites above use a demo site. This section is a canary on a real server with a real single-page app, run on 2026-10-24 and 2026-10-25.
+
+| | |
+|---|---|
+| Server | 4 vCPU, 8 GB RAM, Ubuntu, Docker |
+| Container | `--memory 2g`, `--pids-limit 512`, read-only root with a 512 MB `/tmp`, all capabilities dropped, `no-new-privileges` |
+| Settings | defaults (`MAX_CONCURRENCY=4`), except `PAGE_LOAD_TIMEOUT_MS=10000`, `REQUEST_TIMEOUT_MS=14000`, `DIAGNOSTICS=true`, `LOG_REQUESTS=true` |
+| Browser | Chromium 142 (Alpine) |
+| Site | a React single-page app behind Cloudflare that loads web fonts, an error-reporting library (Sentry) and a Cloudflare Turnstile widget on one page, and reloads itself about one second after it first loads |
+| Caller | `curl` on the same server, so the figures are the service's own time; the network to the caller is not in them |
+| Compared with | the community image this one replaces (`tvanro/prerender-alpine`), running on the same server |
+
+**Home page, one render after another** (each row is a separate container started fresh):
+
+| image | renders | reached the 10 s page-load timeout | fastest | mean | slowest |
+|---|---|---|---|---|---|
+| this image, before the fix below, run 1 | 20 | 12 | 1.8 s | not meaningful | 10.4 s |
+| this image, before the fix below, run 2 (fresh container) | 20 | 9 | 1.8 s | not meaningful | 10.2 s |
+| this image, before the fix, in-page request filter off (`PAGE_FILTER=false`) | 20 | 11 | 1.8 s | not meaningful | 12.3 s |
+| this image, with the fix (`lib/orphans.js`) | 20 | **0** | 1.75 s | **2.0 s** | 2.35 s |
+| 10 pairs, one after the other: this image | 10 | 0 | 1.78 s | 2.12 s | 2.95 s |
+| 10 pairs, one after the other: the community image | 10 | 0 | 1.77 s | 1.83 s | 1.88 s |
+
+With the fix the image is about 0.3 s slower than the community image on an uncached page. The extra time is the quiet period plus the 750 ms (`NAVIGATION_SETTLE_MS`) that
+a request of an old page is given to report back, which only applies when one did not.
+
+**Several pages, 4 renders at the same time:**
+
+| test | result |
+|---|---|
+| 5 page types (home, venue, news, toolkit, game), 8 rounds, 4 at a time: 40 renders | 39 answered 200, the slowest in 3.7 s; 1 answered 504 (the home page reached the page-load timeout with one request still counted, then the 14 s request limit) |
+| The same 5 pages, one render each, one after the other | 1.9 to 2.1 s |
+| Home page 24 times, 4 at a time | 0 timeouts, all 200, slowest 5.7 s |
+| Home page 14 times (6 one after the other, 8 four at a time) | all 132074 bytes, no difference between any two |
+| 30 pages from the sitemap, twice, 4 at a time (60 renders) | 58 under 4.1 s; the contact page 10.3 s both times (see below) |
+
+Output size per page was the same on every repeat: home 132074 bytes, venue 145083, news 94282, toolkit 97698, game 97850. One run of the 24 renders showed two smaller home pages
+(129016 and 131816 bytes); they were not seen again in 14 later renders and were not explained.
+
+**With the render cache** (`CACHE_TTL_S=3600`, image digest `sha256:dcab46ff...`, fresh container, `DIAGNOSTICS=true`):
+
+| test | result |
+|---|---|
+| Six pages (home, venue, news, toolkit, game, contact), three passes one after another | pass 1: all `miss`, 1.96 to 2.78 s, and the contact page 10.2 s. Passes 2 and 3: the five ordinary pages are all `hit`, 1.4 to 3.4 ms, with exactly the bytes of the first render (132074, 145083, 94282, 97698, 97850); the contact page is `miss` at 10.2 s every time, because it never finishes cleanly and is never kept |
+| 30 pages from the sitemap, 4 at a time, twice | round 1: 29 of 30 under 4.5 s, the contact page 10.3 s; round 2: 29 hits, each under 6 ms, the contact page 10.2 s; 0 answers other than 200 |
+| Cache after those runs | 41 hits, 37 misses, 32 pages stored, 3.6 MB (about 110 KB a page), 0 evictions |
+| `page timed out` in the log | 5, all of them the contact page |
+| Requests written off after a self-reload (`wrote off`) | 30 lines; every render that needed it finished cleanly |
+| Container restart | the first request after it `miss`, the second `hit`: a restart empties the cache, which is how a deploy flushes it |
+| Memory | 335 MiB of 2 GiB, 101 processes, 2.5 % CPU when sampled |
+| The 504 seen earlier | not seen in about 80 renders of this build |
+
+**Compared with the community image it replaces:** the home and news pages were byte for byte the same on both; the venue page had the same size and differed only in where one
+`<link rel="modulepreload">` sits in the head (the browser adds it when the script is requested, so its position follows timing).
+
+**In production:** the image was started under the old container's name and port (the old container stopped and renamed, kept for rollback), and the site's own crawler check, `check-prerender.sh`
+through nginx as Googlebot (title, content, canonical, `og:url`, robots tag, sitemap type), passed. Settings used: `ALLOWED_HOSTS` for the site's two host names, `PAGE_LOAD_TIMEOUT_MS=10000`,
+`REQUEST_TIMEOUT_MS=14000`, `CACHE_TTL_S=3600`, `--memory 2g`, read-only root, all capabilities dropped.
+
+**Resources:** after about 110 renders the container used 337 MiB of its 2 GiB (333 MiB after the first 60), 108 processes, and 2.3 to 2.6 % CPU when sampled right after a run.
+
+**What this run found**
+
+1. **Requests of an old page that never report back.** On the first canary about half of the renders ended at the 10 s page-load timeout, with the right content, where the
+   community image took about 1.8 s. The page reloads itself, and the request left open at the timeout was, in 8 of 9 slow renders with the filter on, the error-reporting library's final
+   beacon (the others: a script bundle, and with the filter off up to six API calls). Chromium never reported those requests as finished or failed, so Prerender waited for them. It was not
+   the in-page request filter (about the same with it off), and not the proxy connecting (every tunnel opened in 5 to 7 ms, none failed, no request stayed paused). It was not reproduced with a
+   local test page in 100+ renders. Fixed by `lib/orphans.js`: after the page starts a new document, requests of the old document get `NAVIGATION_SETTLE_MS` to report back and are then
+   written off. Result: 0 of 20 slow, and the fix fired in 14 of those 20 renders.
+2. **A page with a widget that never finishes.** The contact page (Cloudflare Turnstile) is not finished from Prerender's point of view, because the widget keeps connections open.
+   It takes the full page-load timeout: 10.2 s with this image (10 s limit) and 20.2 s with the community image (its 20 s limit). The site-side fix is `window.prerenderReady`.
+3. **One 504 on the home page in about 100 renders under load**, not reproduced in 38 more, nor in about 80 renders of the build with the cache. The log showed a page-load timeout with one request still counted. Its cause is not known; the web server's fallback to the normal app covers a request like it. Watch `prerender_timeouts_total` in production.
+
 ## Not covered
 
 - The Docker image was not built or run in the sandbox where the suites were developed (no container runtime there). CI builds it, smoke-tests it, runs the attack and exhaustion suites against the container, and scans it; read the results of the run on the commit you deploy.
