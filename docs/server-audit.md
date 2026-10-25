@@ -46,3 +46,19 @@ docker pull $NEW && sed "s|^IMAGE_ID=.*|IMAGE_ID=$NEW|" scripts/server-audit.sh 
 
 The "image id" line in section 1 then shows the new digest, while the hardening checks still describe the `prerender` container.
 
+## Long soak on the server
+
+`scripts/server-soak.js` is a separate, longer check (default 60 minutes, `SOAK_MINUTES`). It runs entirely inside one throw-away container of the image, called `pt-soak`: nothing is published, nothing outside is
+contacted, and the production container is not touched. Inside, it starts the service and a small synthetic site on loopback and repeats rounds of a burst of 16 callers for one new page, a mixed load of ordinary and hostile
+pages (alert, pop-up, endless polling, never finishing) with many different URLs so the cache keeps evicting, and repeat requests for cached pages. Once a minute it records memory, descriptors, threads, processes, the cache
+and the queue from `/proc`, and at the end it compares the second half of the run with the first. It exits with code 1 and a list of problems if something kept growing, an answer was wrong, a burst rendered more than once, or the
+service did not recover. The container has the production limits (2 GB, 2 CPUs, 512 processes, read-only root, no capabilities).
+
+```sh
+docker run --rm --name pt-soak --read-only --tmpfs /tmp:size=512m --cap-drop ALL --security-opt no-new-privileges:true \
+  --pids-limit 512 --memory 2g --cpus 2 -v /tmp/server-soak.js:/soak/server-soak.js:ro -e SOAK_MINUTES=60 \
+  --entrypoint node <image> /soak/server-soak.js
+```
+
+Run the audit first and the soak after it, not at the same time: both use 2 CPUs, and the server also runs production, redis and mongodb.
+
