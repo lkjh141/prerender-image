@@ -95,6 +95,13 @@ on their own, so a page that cannot be cached behaves as before. Callers that le
 p50 6.3 ms, p99 22 ms, no wrong answers. During a flood of 200 different new URLs, `/healthz` still answered in 0.6 ms, 36 renders finished and 164 requests were turned away with 503
 at once. The full suite, with the browser suites, ran 156 tests: 155 passed, 0 failed, 1 skipped (a test that needs the container).
 
+**Finding on the live server: repeated log lines from the browser itself.** The audit script run on the production server found 56 `egress blocked (port)` lines in 2,000 log lines, all for
+`mtalk.google.com:5228`. That is Chromium's own push-messaging connection, which the egress proxy rightly refuses because port 5228 is not allowed. It does no harm, but it hides real
+refusals in the log. The same behaviour was reproduced in the sandbox. Four ways to stop the browser trying were tested (disabling the `GCM`, `PushMessaging` and `GCMDriver` features
+and `--disable-push-api` had no effect; pointing `--gcm-mcs-endpoint` at a loopback address stopped the log lines but made the browser connect straight to that loopback port, which
+bypasses the egress proxy, so it was rejected). Instead the egress proxy now writes the same refusal at most once a minute, with the number of repeats it stood for. The metrics still count every
+refusal. The test is in `test/egress.test.js`.
+
 **Not a flaw, but worth knowing.** `/metrics` (when `METRICS_ENABLED=true`) is served on the same port as the renders. Keep that port on `127.0.0.1` or block `/metrics` in the web
 server, so that only the monitoring system can read it.
 

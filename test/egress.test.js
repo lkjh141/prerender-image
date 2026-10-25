@@ -260,3 +260,18 @@ test('the extra ports an operator opens apply to listed hosts too', async () => 
   assert.equal((await p.decide('public.example', 8443)).ok, true);
   assert.equal((await p.decide('public.example', 8080)).reason, 'port');
 });
+
+test('the same refusal is logged once a minute, with the repeats counted, while the metrics count every one', async () => {
+  const lines = []; let clock = 1000;
+  const p = createEgressProxy({ config: { allowedHosts: [], allowPrivate: false }, settings, reservedPorts: new Set(), lookup, log: line => lines.push(line), now: () => clock });
+  for (let i = 0; i < 5; i += 1) await p.decide('mtalk.example', 5228);
+  assert.equal(lines.length, 1, 'five identical refusals, one line');
+  await p.decide('other.example', 5228);
+  assert.equal(lines.length, 2, 'another target is logged at once');
+  clock += 61000;
+  await p.decide('mtalk.example', 5228);
+  assert.equal(lines.length, 3);
+  assert.match(lines[2], /4 more since the last line/);
+  assert.equal(p.stats.blocked, 7, 'every refusal is still counted');
+});
+
