@@ -210,3 +210,143 @@ test('raw protocol abuse is answered or closed without a crash', async () => {
     assert.equal((await s.get('/healthz')).status, 200, 'still serving');
   } finally { await s.close(); }
 });
+
+// ---- the render cache -------------------------------------------------------------------------------------------------------------
+
+const clean = (body = '<html>page</html>', headers = {}) => (req, res) => { res.writeHead(200, { 'content-type': 'text/html', 'x-prerender-complete': '1', ...headers }); res.end(body); };
+
+test('the cache is off by default: nothing is kept even when the render is clean', async () => {
+  const s = await setup({}, clean());
+  try {
+    const a = await s.get('/https://site.example/a');
+    const b = await s.get('/https://site.example/a');
+    assert.equal(s.calls.length, 2);
+    assert.equal(a.headers['x-prerender-cache'], undefined);
+    assert.equal(b.headers['x-prerender-cache'], undefined);
+  } finally { await s.close(); }
+});
+
+test('with a cache, the second request is answered without Prerender and is identical', async () => {
+  const s = await setup({ CACHE_TTL_S: '60' }, clean('<html>page</html>', { etag: '"abc"', 'set-cookie': 'sid=1' }));
+  try {
+    const a = await s.get('/https://site.example/a?x=1');
+    const b = await s.get('/https://site.example/a?x=1');
+    assert.equal(s.calls.length, 1, 'rendered once');
+    assert.equal(a.headers['x-prerender-cache'], 'miss');
+    assert.equal(b.headers['x-prerender-cache'], 'hit');
+    assert.equal(b.status, 200);
+    assert.equal(b.body, a.body);
+    for (const name of ['etag', 'content-type', 'content-length', 'x-content-type-options', 'content-security-policy']) assert.equal(b.headers[name], a.headers[name], name);
+    assert.equal(b.headers['set-cookie'], undefined);
+    assert.equal(b.headers['x-prerender-complete'], undefined, 'the internal marker never reaches the client');
+    assert.equal(a.headers['x-prerender-complete'], undefined);
+    const other = await s.get('/https://site.example/a?x=2');
+    assert.equal(other.headers['x-prerender-cache'], 'miss', 'a different query string is a different page');
+    assert.equal(s.calls.length, 2);
+  } finally { await s.close(); }
+});
+
+test('only a clean 200 is kept', async () => {
+  const cases = [
+    ['no completeness marker', 200, { 'x-prerender-complete': undefined }],
+    ['an incomplete render', 200, { 'x-prerender-complete': '0' }],
+    ['a 404', 404, {}],
+    ['a 500', 500, {}],
+    ['a redirect', 301, { location: '/x' }],
+    ['no-store', 200, { 'cache-control': 'no-store' }],
+    ['private', 200, { 'cache-control': 'max-age=60, private' }],
+  ];
+  for (const [label, status, headers] of cases) {
+    const s = await setup({ CACHE_TTL_S: '60' }, (req, res) => {
+      const h = { 'content-type': 'text/html', 'x-prerender-complete': '1', ...headers };
+      for (const k of Object.keys(h)) if (h[k] === undefined) delete h[k];
+      res.writeHead(status, h); res.end('<html>x</html>');
+    });
+    try {
+      await s.get('/https://site.example/a');
+      const again = await s.get('/https://site.example/a');
+      assert.equal(s.calls.length, 2, `${label} must not be kept`);
+      assert.notEqual(again.headers['x-prerender-cache'], 'hit', label);
+    } finally { await s.close(); }
+  }
+});
+
+test('an empty page is not kept', async () => {
+  const s = await setup({ CACHE_TTL_S: '60' }, clean(''));
+  try {
+    await s.get('/https://site.example/a'); await s.get('/https://site.example/a');
+    assert.equal(s.calls.length, 2);
+  } finally { await s.close(); }
+});
+
+test('a request for a host that is not allowed never reaches the cache, and a malformed one neither', async () => {
+  const s = await setup({ CACHE_TTL_S: '60' }, clean());
+  try {
+    for (const path of ['/https://evil.example/a', '/https://site.example.evil.example/', '/http://169.254.169.254/', '/https://site.example/%zz']) {
+      const r = await s.get(path);
+      assert.ok(r.status >= 400, path);
+      assert.equal(r.headers['x-prerender-cache'], undefined, path);
+    }
+    assert.equal(s.calls.length, 0);
+  } finally { await s.close(); }
+});
+
+test('an answer is served from the cache when the queue is full and when memory is short; entries expire', async () => {
+  const { createRenderCache } = require('../lib/cache');
+  const clockState = { at: 5000 };
+  const cache = createRenderCache({ ttlMs: 10000, maxBytes: 1e6, maxEntries: 10, now: () => clockState.at });
+  let slow = false; let release = [];
+  const settings = loadSettings({ MAX_CONCURRENCY: '1', MAX_QUEUE: '0', PAGE_LOAD_TIMEOUT_MS: '1000', REQUEST_TIMEOUT_MS: '2000', TAB_MAX_AGE_MS: '5000' });
+  const calls = [];
+  const upstream = http.createServer((req, res) => {
+    calls.push(req.url);
+    const send = () => { res.writeHead(200, { 'content-type': 'text/html', 'x-prerender-complete': '1' }); res.end('<html>x</html>'); };
+    if (slow) release.push(send); else send();
+  });
+  await new Promise(r => upstream.listen(0, '127.0.0.1', r));
+  let pressure = false;
+  const front = createFront({ config, settings, upstreamPort: upstream.address().port, cache, isBrowserConnected: () => true, underMemoryPressure: () => pressure, getUtil: () => util });
+  const server = front.createServer();
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  const get = path => new Promise((resolve, reject) => {
+    http.get({ host: '127.0.0.1', port: server.address().port, path, agent: false }, res => { res.resume(); res.on('end', () => resolve({ status: res.statusCode, headers: res.headers })); }).on('error', reject);
+  });
+  try {
+    assert.equal((await get('/https://site.example/kept')).status, 200); // stored
+    slow = true;
+    const busy = get('/https://site.example/busy'); // takes the only slot and does not finish
+    await sleep(100);
+    assert.equal((await get('/https://site.example/other')).status, 503, 'a page that is not kept is turned away');
+    const hit = await get('/https://site.example/kept');
+    assert.equal(hit.status, 200); assert.equal(hit.headers['x-prerender-cache'], 'hit');
+    pressure = true;
+    assert.equal((await get('/https://site.example/kept')).headers['x-prerender-cache'], 'hit', 'also under memory pressure');
+    assert.equal((await get('/https://site.example/other2')).status, 503);
+    pressure = false;
+    release.forEach(send => send()); await busy;
+    clockState.at += 10001;
+    slow = false;
+    const after = await get('/https://site.example/kept');
+    assert.equal(after.headers['x-prerender-cache'], 'miss', 'expired: rendered again');
+  } finally { server.closeAllConnections?.(); await new Promise(r => server.close(r)); upstream.closeAllConnections?.(); await new Promise(r => upstream.close(r)); }
+});
+
+test('draining turns cached pages away like everything else, and metrics show the cache', async () => {
+  const s = await setup({ CACHE_TTL_S: '60' }, clean());
+  try {
+    await s.get('/https://site.example/a'); await s.get('/https://site.example/a');
+    const m = await s.get('/metrics');
+    assert.match(m.body, /prerender_cache_hits_total 1/);
+    assert.match(m.body, /prerender_cache_misses_total 1/);
+    assert.match(m.body, /prerender_cache_stores_total 1/);
+    assert.match(m.body, /prerender_cache_entries 1/);
+    const drained = s.front.drain(1000);
+    await drained;
+    assert.equal((await s.get('/https://site.example/a')).status, 503);
+  } finally { await s.close(); }
+});
+
+test('metrics do not mention the cache when it is off', async () => {
+  const s = await setup({}, clean());
+  try { assert.doesNotMatch((await s.get('/metrics')).body, /prerender_cache_/); } finally { await s.close(); }
+});

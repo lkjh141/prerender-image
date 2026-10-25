@@ -116,6 +116,7 @@ The ones you will use. The full reference, with every limit, its range and sizin
 | `MAX_QUEUE` | `32` | Requests that may wait for a free slot. More get 503 straight away. |
 | `REQUEST_TIMEOUT_MS` | `30000` | Hard limit for one request, then 504. |
 | `WAIT_AFTER_LAST_REQUEST_MS` | `500` | Quiet time after the page's last request before it counts as finished. `200` makes a simple page take about 0.45 s instead of 0.75 s. |
+| `CACHE_TTL_S` | `0` | Seconds a finished render is kept in memory and served again without a browser. `0` is off. Only clean `200` renders are kept; see [configuration](docs/configuration.md#render-cache-optional-off-by-default). `CACHE_MAX_MB` (64) and `CACHE_MAX_ENTRIES` (2000) bound it. |
 | `BLOCK_RESOURCES` | `false` | `true` also refuses trackers, ad networks, fonts and images while rendering. |
 | `ALLOW_INVALID_CERTS` | `false` | `true` accepts bad certificates. Development only. |
 | `METRICS_ENABLED` | `false` | `true` serves Prometheus text on `/metrics`. |

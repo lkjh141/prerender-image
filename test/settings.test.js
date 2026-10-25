@@ -43,3 +43,14 @@ test('diagnostics are off by default and the page filter is on; both can be swit
   assert.equal(loadSettings({ PAGE_FILTER: 'FALSE' }).PAGE_FILTER, false);
   assert.equal(loadSettings({ PAGE_FILTER: 'nope' }).PAGE_FILTER, true, 'only the word false switches the filter off');
 });
+
+test('the render cache is off unless CACHE_TTL_S is set, and its limits are checked', () => {
+  const s = loadSettings({});
+  assert.equal(s.CACHE_TTL_S, 0);
+  assert.equal(s.CACHE_MAX_MB, 64);
+  assert.equal(s.CACHE_MAX_ENTRIES, 2000);
+  assert.equal(loadSettings({ CACHE_TTL_S: '3600', CACHE_MAX_MB: '128' }).CACHE_TTL_S, 3600);
+  for (const bad of [{ CACHE_TTL_S: '-1' }, { CACHE_TTL_S: '99999999' }, { CACHE_TTL_S: '1h' }, { CACHE_MAX_MB: '0' }, { CACHE_MAX_MB: '5000' }, { CACHE_MAX_ENTRIES: '0' }]) {
+    assert.throws(() => loadSettings(bad), Error, JSON.stringify(bad));
+  }
+});

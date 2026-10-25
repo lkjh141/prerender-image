@@ -47,6 +47,7 @@ against the first version of this image or against stock Prerender before they w
 | 22 | A compromised browser | Code execution as the `node` user | Non-root, read-only filesystem, no capabilities, no-new-privileges, no package manager in the image, memory/pid limits. `--no-sandbox` means the container **is** the sandbox | smoke test |
 | 23 | A vulnerable base image or dependency | Known exploit | Weekly rebuild from scratch, Trivy (fixable HIGH/CRITICAL fails), `npm audit`, locked dependencies, pinned action SHAs | CI |
 | 24 | A tampered image | Malicious image deployed | Provenance attestation, SBOM, pin by digest, verify | CI |
+| 25 | The optional render cache is filled with junk (many query strings), or holds a wrong or incomplete page | Useful pages pushed out; crawlers served stale or partial content | Bounded by bytes and entries with least-recently-used eviction; only a clean `200` render is kept (never a timeout, a failed request of the page, an error, another status, `no-store`/`private`); the key is the validated URL and the answer never depends on the caller; off unless `CACHE_TTL_S` is set; no flush endpoint | `cache`, `front`, `adversarial/cache` |
 
 ## What is left (residual risk)
 

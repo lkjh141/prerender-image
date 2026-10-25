@@ -23,7 +23,7 @@ test('the answer is untouched, the request log and the tab connection are releas
   await run(req);
   assert.equal(req.prerender.content, '<html>answer</html>');
   assert.equal(req.prerender.statusCode, 200);
-  assert.deepEqual(req.prerender.headers, { a: 'b' });
+  assert.deepEqual(req.prerender.headers, { a: 'b', 'x-prerender-complete': '0' }, 'the fake request has a browser error, so it is marked incomplete');
   assert.equal(req.prerender.pageLoadInfo, null);
   assert.equal(req.prerender.requests, null);
   assert.equal(tab.listenerCount('x'), 0, 'handlers removed');
@@ -51,4 +51,26 @@ test('releasing never fails the request, whatever the state is', async () => {
   for (const req of [{ prerender: undefined }, { prerender: { tab: null } }, { res: null, prerender: { tab: { close: () => { throw new Error('boom'); } } } }, { res: { once() { throw new Error('boom'); } }, prerender: {} }]) {
     await run(req); // resolves: next() was called
   }
+});
+
+const { markCompleteness } = require('../lib/release');
+
+test('a render is marked complete only when it finished cleanly', () => {
+  const mark = state => { const req = { prerender: { headers: { a: 'b' }, ...state } }; markCompleteness(req); return req.prerender.headers; };
+  assert.equal(mark({})['x-prerender-complete'], '1');
+  assert.equal(mark({ errors: [] })['x-prerender-complete'], '1');
+  assert.equal(mark({ timedout: true })['x-prerender-complete'], '0', 'a page-load timeout');
+  assert.equal(mark({ dirtyRender: true })['x-prerender-complete'], '0', 'a 5xx answer to one of the page\'s own requests');
+  assert.equal(mark({ errors: ['x'] })['x-prerender-complete'], '0', 'a browser error');
+  assert.equal(mark({})['a'], 'b', 'the page\'s own headers are kept');
+  const bare = { prerender: {} }; markCompleteness(bare);
+  assert.equal(bare.prerender.headers['x-prerender-complete'], '1', 'no headers object yet');
+  markCompleteness({}); // no state at all: must not throw
+});
+
+test('the release plugin marks the render before it hands the memory back', async () => {
+  const { req } = fakeRequest();
+  req.prerender.errors = [];
+  await run(req);
+  assert.equal(req.prerender.headers['x-prerender-complete'], '1');
 });

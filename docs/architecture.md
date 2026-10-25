@@ -111,6 +111,8 @@ exits with code 0 (1 if the drain timed out). `tini -g` is PID 1 and forwards th
 | `lib/front.js` | The public server |
 | `lib/egress.js` | The proxy Chromium must use |
 | `lib/watchdog.js` | Stale tabs, memory, frozen browser |
-| `lib/release.js` | Early release of per-request memory |
+| `lib/release.js` | Early release of per-request memory; marks whether a render finished cleanly |
+| `lib/orphans.js` | Writes off requests of an old document that a self-navigating page leaves unreported |
+| `lib/cache.js` | The optional in-memory cache of finished renders (used by `lib/front.js`) |
 | `scripts/smoke.sh` | Container checks run by CI on every build and on the published digest |
 | `scripts/automerge*.js` | The auto-merge rules and runner, see [automerge-and-verification.md](automerge-and-verification.md) |
