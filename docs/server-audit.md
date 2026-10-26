@@ -61,10 +61,10 @@ It checks, one `PASS` or `FAIL` line each:
 
 ```sh
 bash scripts/verify-image.sh ghcr.io/lkjh141/prerender-image@sha256:<digest>
-VERIFY_HOST=stagerage.online VERIFY_PORT=3910 bash scripts/verify-image.sh <image>   # another allowed site or port
+VERIFY_HOSTS=stagerage.online,www.stagerage.online VERIFY_PORT=3910 bash scripts/verify-image.sh <image>   # the production host list, another port
 ```
 
-It exits with 1 when any check failed or the container did not become healthy, so it can also run in a pipeline on a machine with Docker. The load steps send about 70 real renders of the allowed host (`example.com` by default), so use a host that you own or that can take it.
+It exits with 1 when any check failed or the container did not become healthy, so it can also run in a pipeline on a machine with Docker. `VERIFY_HOSTS` takes the same comma-separated list as the production `ALLOWED_HOSTS`: every host in it is rendered, the first one is the target of the hostile-URL checks, and a subdomain that is not listed must be refused (names are exact). The load steps send about 70 real renders of the first host (`example.com` by default), so use a host that you own or that can take it.
 
 ## Long soak on the server
 

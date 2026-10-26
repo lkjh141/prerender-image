@@ -3,14 +3,17 @@
 # targets are refused, the response headers, speed, a burst of load, and that the container is unharmed afterwards.
 # Nothing else on the machine is touched: one container (pt-verify) and, if it does not exist yet, one network that is removed again.
 # Usage: scripts/verify-image.sh IMAGE
-#   VERIFY_HOST   the one allowed host to render (default example.com; it must be reachable from this machine)
+#   VERIFY_HOSTS  the allowed hosts, comma separated, exactly as the production ALLOWED_HOSTS (default example.com; each must be
+#                 reachable from this machine). Every one is rendered; the first is also the target of the hostile-URL checks.
+#                 VERIFY_HOST is accepted as a one-host alias.
 #   VERIFY_PORT   the loopback port for the test container (default 3903)
 # A 503 for some of the 30 uncached pages is reported as a pass with a note: it is the queue limit working.
 # Exit code 0 when every check passed, 1 when any failed or the container did not start.
 set -uo pipefail
 
 IMAGE="${1:?usage: verify-image.sh IMAGE}"
-HOST="${VERIFY_HOST:-example.com}"
+HOSTS="${VERIFY_HOSTS:-${VERIFY_HOST:-example.com}}"
+HOST="${HOSTS%%,*}"
 PORT="${VERIFY_PORT:-3903}"
 NAME=pt-verify
 NET=pt-verify-net
@@ -53,7 +56,7 @@ echo "image: $IMAGE"
 if ! docker run -d --name "$NAME" --network "$NET" -p "127.0.0.1:$PORT:3000" \
   --read-only --tmpfs /tmp:size=512m --cap-drop ALL --security-opt no-new-privileges:true \
   --pids-limit 512 --memory 2g --cpus 2 \
-  -e ALLOWED_HOSTS="$HOST" -e REQUEST_TIMEOUT_MS=14000 -e PAGE_LOAD_TIMEOUT_MS=10000 \
+  -e ALLOWED_HOSTS="$HOSTS" -e REQUEST_TIMEOUT_MS=14000 -e PAGE_LOAD_TIMEOUT_MS=10000 \
   -e METRICS_ENABLED=true -e CACHE_TTL_S=3600 "$IMAGE" >/dev/null; then
   echo "RESULT: the container could not be created"
   exit 1
@@ -77,7 +80,10 @@ PAGE="$BASE/https://$HOST/"
 
 echo "== 1 health and a real render"
 want "healthz" 200 "$BASE/healthz"
-want "GET allowed page" 200 "$PAGE"
+IFS=, read -r -a HOSTLIST <<< "$HOSTS"
+for h in "${HOSTLIST[@]}"; do
+  want "GET allowed host $h" 200 "$BASE/https://$h/"
+done
 want "GET allowed page again (cache)" 200 "$PAGE"
 
 echo "== 2 methods (only GET and HEAD may work)"
@@ -96,6 +102,7 @@ c=$(head -c 1048576 /dev/zero | curl -s -o /dev/null -m 40 -w '%{http_code}' -X 
 echo "== 3 hostile targets (must be refused, never 2xx or 5xx)"
 refuse() { want "refuse: $1" '400|403|404|414' --path-as-is "$BASE/$2"; }
 refuse "other host"        "https://example.invalid/"
+refuse "unlisted subdomain (names are exact)" "https://unlisted-check.$HOST/"
 refuse "localhost address" "http://127.0.0.1:3000/healthz"
 refuse "localhost name"    "http://localhost/"
 refuse "cloud metadata"    "http://169.254.169.254/latest/meta-data/"
