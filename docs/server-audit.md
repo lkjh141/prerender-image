@@ -56,7 +56,7 @@ It checks, one `PASS` or `FAIL` line each:
 2. Methods: `HEAD` answers 200 with the headers of a `GET` and no body; `POST`, `PUT`, `DELETE`, `PATCH`, `OPTIONS`, `TRACE` and `PROPFIND` get 405 with `Allow: GET, HEAD`, also with a 1 MB body.
 3. 26 hostile targets, which must be refused and never answered with a 2xx or a 5xx: another host, loopback and private addresses, the cloud metadata address, IPv6 and numeric spellings, the user-info, suffix and prefix tricks, other schemes, traversal, a NUL byte, an injected header, a port that is not 80 or 443, a 20 kB URL and a 20 kB header.
 4. No `X-Powered-By` or `Server` header, an HTML content type, and the metrics.
-5. Speed and load: a cached answer under 0.5 s, 40 requests for one page with 20 at once, and 30 different uncached pages with 15 at once. None may fail with a 5xx or be dropped.
+5. Speed and load: a cached answer under 0.5 s, 40 requests for one page with 20 at once, and 30 different uncached pages with 15 at once. The 40 for one page must all answer 200. Of the 30 different pages, some may be shed with a 503 (the render slots and the queue are limited, by design); any other failure or a dropped connection fails the check. If many are shed, raise `MAX_CONCURRENCY` or `MAX_QUEUE`.
 6. The container afterwards: still healthy, no restart, not killed for memory.
 
 ```sh
