@@ -127,7 +127,7 @@ about 100 pages, a frozen browser going unnoticed, cookies and security headers 
 If the app sets `window.prerenderReady = false` early and `true` when the page is done, Prerender waits for that signal instead, and every setting renders the page completely (12 of 12 in the test), at any speed.
 `WAIT_AFTER_LAST_REQUEST_MS=200` is then safe and makes a simple page take about 0.45 s.
 
-**Checking a live server.** [docs/server-audit.md](docs/server-audit.md) describes `scripts/server-audit.sh`, a read-only audit that inspects the production container and attacks and load-tests only separate throw-away containers.
+**Checking a live server.** [docs/server-audit.md](docs/server-audit.md) describes `scripts/server-audit.sh`, a read-only audit that inspects the production container and attacks and load-tests only separate throw-away containers. `scripts/verify-image.sh IMAGE` is a shorter check of one image in a single throw-away container (methods, hostile targets, headers, load).
 
 ## Settings
 
