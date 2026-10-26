@@ -46,6 +46,26 @@ docker pull $NEW && sed "s|^IMAGE_ID=.*|IMAGE_ID=$NEW|" scripts/server-audit.sh 
 
 The "image id" line in section 1 then shows the new digest, while the hardening checks still describe the `prerender` container.
 
+## Checking a new image before the swap
+
+`scripts/verify-image.sh IMAGE` is a shorter check of one image that does not need the production container at all. It starts a single throw-away container called `pt-verify` with the recommended hardening (read-only root, no capabilities, no new privileges, 512 processes, 2 GB, 2 CPUs), bound to `127.0.0.1:3903`, and removes it when it ends. If its private network does not exist yet, it creates one and removes it again. It stops without touching anything if a container of that name already exists or the port is in use.
+
+It checks, one `PASS` or `FAIL` line each:
+
+1. `/healthz`, a real render and the cached repeat.
+2. Methods: `HEAD` answers 200 with the headers of a `GET` and no body; `POST`, `PUT`, `DELETE`, `PATCH`, `OPTIONS`, `TRACE` and `PROPFIND` get 405 with `Allow: GET, HEAD`, also with a 1 MB body.
+3. 26 hostile targets, which must be refused and never answered with a 2xx or a 5xx: another host, loopback and private addresses, the cloud metadata address, IPv6 and numeric spellings, the user-info, suffix and prefix tricks, other schemes, traversal, a NUL byte, an injected header, a port that is not 80 or 443, a 20 kB URL and a 20 kB header.
+4. No `X-Powered-By` or `Server` header, an HTML content type, and the metrics.
+5. Speed and load: a cached answer under 0.5 s, 40 requests for one page with 20 at once, and 30 different uncached pages with 15 at once. None may fail with a 5xx or be dropped.
+6. The container afterwards: still healthy, no restart, not killed for memory.
+
+```sh
+bash scripts/verify-image.sh ghcr.io/lkjh141/prerender-image@sha256:<digest>
+VERIFY_HOST=stagerage.online VERIFY_PORT=3910 bash scripts/verify-image.sh <image>   # another allowed site or port
+```
+
+It exits with 1 when any check failed or the container did not become healthy, so it can also run in a pipeline on a machine with Docker. The load steps send about 70 real renders of the allowed host (`example.com` by default), so use a host that you own or that can take it.
+
 ## Long soak on the server
 
 `scripts/server-soak.js` is a separate, longer check (default 60 minutes, `SOAK_MINUTES`). It runs entirely inside one throw-away container of the image, called `pt-soak`: nothing is published, nothing outside is
