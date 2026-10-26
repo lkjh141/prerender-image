@@ -82,7 +82,8 @@ echo "== 1 health and a real render"
 want "healthz" 200 "$BASE/healthz"
 IFS=, read -r -a HOSTLIST <<< "$HOSTS"
 for h in "${HOSTLIST[@]}"; do
-  want "GET allowed host $h" 200 "$BASE/https://$h/"
+  # A listed host may answer with its own redirect (for example www to the bare domain); the service passes that status on unchanged.
+  want "GET allowed host $h (200, or the site's own redirect)" '200|301|302|307|308' "$BASE/https://$h/"
 done
 want "GET allowed page again (cache)" 200 "$PAGE"
 
