@@ -63,7 +63,7 @@ curl http://127.0.0.1:3000/https://example.com/some/page
 ```
 
 The page to render is part of the path (`/https://example.com/some/page`). A host that is not in `ALLOWED_HOSTS` is answered with 403. Anything
-that is not `GET /<http or https URL>` is answered with 404, 405 or 400. `GET /healthz` is the health check.
+that is not `GET` or `HEAD` of `/<http or https URL>` is answered with 404, 405 or 400. `GET /healthz` is the health check.
 
 The published port is bound to `127.0.0.1` in the example because the service has no authentication. Only a process on the same machine,
 normally the web server, should be able to reach it.

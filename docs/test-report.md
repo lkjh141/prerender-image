@@ -199,6 +199,12 @@ which writes the same refusal at most once a minute.
 
 Not covered by the script, by design: anything that would change or restart the production container, and the checks that need the container's process or debugging port.
 
+**Finding after the swap on the live server: `HEAD` was refused with 405.** The first check on the production server after the swap, `curl -sI` against a page, printed `HTTP/2 405` for every route. The front server accepted only `GET`, while
+the image it replaced answered `HEAD`, so a crawler, link checker or monitor that sends `HEAD` through nginx would have got 405 instead of the status of the page. Page content (a `GET`) was not affected. The front server now accepts `HEAD` and
+answers it like a `GET` with the body left out: the same status and headers, the length a `GET` would have, a render for an uncached page, the cache for a cached one, and the same 403, 400 and 404 refusals. Other methods still get 405, now with
+`Allow: GET, HEAD`. The tests are in `test/front.test.js` (`HEAD gets the headers of a GET and no body, ...`) and `test/adversarial/input.test.js` (`HEAD on a page answers 200 with the headers of a GET and no body`). The earlier tests only checked that
+`HEAD` produced an answer, so none of them showed that the answer was a 405.
+
 ## Measured results
 
 4-core sandbox, Chromium 141 (Playwright's build; the Alpine image uses Alpine's), Node 22. Latency is wall clock from the caller.
