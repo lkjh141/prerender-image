@@ -39,6 +39,20 @@ test('unusual HTTP methods are handled', { skip: skipReason, timeout: 120000 }, 
   await stillWorks('methods');
 });
 
+test('HEAD on a page answers 200 with the headers of a GET and no body', { skip: skipReason, timeout: 120000 }, async () => {
+  const url = `${service.url}/${site.url('/ok')}`;
+  const get = await request(url, { headers: { 'user-agent': 'Googlebot' }, timeout: 60000 });
+  const head = await request(url, { method: 'HEAD', headers: { 'user-agent': 'Googlebot' }, timeout: 60000 });
+  assert.equal(get.status, 200);
+  assert.equal(head.status, 200, 'a crawler or monitor that sends HEAD gets the status of the page');
+  assert.equal(head.body, '', 'no body for HEAD');
+  assert.equal(head.headers['content-length'], get.headers['content-length'], 'the length a GET would have');
+  assert.equal(head.headers['content-type'], get.headers['content-type']);
+  const refused = await request(`${service.url}/http://example.org/`, { method: 'HEAD', timeout: 30000 });
+  assert.equal(refused.status, 403, 'HEAD is refused for a host that is not allowed, like GET');
+  await stillWorks('head');
+});
+
 test('/render with strange parameters does not crash the service', { skip: skipReason, timeout: 180000 }, async () => {
   const u = encodeURIComponent(site.url('/ok'));
   const cases = [

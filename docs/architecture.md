@@ -41,7 +41,7 @@ listener. That server is small enough to reason about and test (`test/front.test
 
 What the front server does, in order:
 
-1. Accepts only `GET /<http or https URL>`, plus `/healthz` (and `/metrics` if enabled). Every other method gets 405, every other path 404 or 400.
+1. Accepts only `GET /<http or https URL>` (and `HEAD`, which gets the same status and headers with no body and costs the same render), plus `/healthz` (and `/metrics` if enabled). Every other method gets 405 with `Allow: GET, HEAD`, every other path 404 or 400.
    The `/render` API is not reachable.
 2. Rejects control characters, undecodable escapes and over-long paths, with fixed one-line texts.
 3. Computes the target URL **with Prerender's own function** and checks it against `ALLOWED_HOSTS` (403). Using Prerender's function matters: if the

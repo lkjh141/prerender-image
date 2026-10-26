@@ -66,7 +66,7 @@ test('bad requests are refused before Prerender sees them, with fixed short text
     for (const method of ['POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS', 'TRACE']) {
       const r = await s.get('/https://site.example/', { method });
       assert.equal(r.status, 405, method);
-      assert.equal(r.headers.allow, 'GET');
+      assert.equal(r.headers.allow, 'GET, HEAD');
     }
     assert.deepEqual(s.calls, [], 'nothing reached Prerender');
   } finally { await s.close(); }
@@ -349,4 +349,31 @@ test('draining turns cached pages away like everything else, and metrics show th
 test('metrics do not mention the cache when it is off', async () => {
   const s = await setup({}, clean());
   try { assert.doesNotMatch((await s.get('/metrics')).body, /prerender_cache_/); } finally { await s.close(); }
+});
+
+test('HEAD gets the headers of a GET and no body, is refused like a GET, and shares the cache', async () => {
+  const s = await setup({ CACHE_TTL_S: '60' }, ok('<html>head page</html>', { etag: '"h1"', 'x-robots-tag': 'noindex', 'x-prerender-complete': '1' }));
+  try {
+    const get = await s.get('/https://site.example/head');
+    assert.equal(get.status, 200);
+    const head = await s.get('/https://site.example/head', { method: 'HEAD' });
+    assert.equal(head.status, 200);
+    assert.equal(head.body, '', 'no body for HEAD');
+    assert.equal(head.headers['content-length'], String(Buffer.byteLength('<html>head page</html>')), 'the length a GET would have');
+    assert.equal(head.headers.etag, '"h1"');
+    assert.equal(head.headers['x-prerender-cache'], 'hit', 'served from the cache, not rendered again');
+    assert.equal(s.calls.length, 1, 'only the GET reached Prerender');
+    const fresh = await s.get('/https://site.example/other', { method: 'HEAD' });
+    assert.equal(fresh.status, 200, 'a HEAD for an uncached page renders it');
+    assert.equal(fresh.body, '');
+    assert.equal(s.calls.length, 2);
+    for (const [path, status] of [['/https://evil.example/', 403], ['/https://site.example/%zz', 400], ['/nothing', 404]]) {
+      const r = await s.get(path, { method: 'HEAD' });
+      assert.equal(r.status, status, path);
+      assert.equal(r.body, '', `${path}: no body`);
+    }
+    const health = await s.get('/healthz', { method: 'HEAD' });
+    assert.equal(health.status, 200);
+    assert.equal(s.calls.length, 2, 'refused HEAD requests never reached Prerender');
+  } finally { await s.close(); }
 });
