@@ -19,7 +19,7 @@ Every pull request and every push to `main` runs `.github/workflows/build.yml`:
 | Dockerfile lint (hadolint) | The pinned hadolint 2.14.0 finds no problem in the Dockerfile. |
 | **Verified** | One result that is green only when all of the above are. Branch protection and the auto-merge workflow both key on this name. A skipped publish job on a pull request is expected. |
 
-CodeQL, OpenSSF Scorecard and dependency review run in their own workflows (`codeql.yml`, `scorecard.yml`, `dependency-review.yml`).
+CodeQL runs through the repository's default setup. OpenSSF Scorecard and dependency review run in their own workflows (`scorecard.yml`, `dependency-review.yml`).
 They are not part of **Verified**, and branch protection decides whether they block. `docs/security-checks.md` lists each check and its usage limit.
 
 A weekly run rebuilds from scratch so Alpine and Chromium security fixes are picked up. Without it, the image would only change when someone changed the code,
