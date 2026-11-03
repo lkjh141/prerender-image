@@ -25,7 +25,8 @@ that the files cannot make. The rules for what a usage limit may do are in the l
 1. **A usage limit may skip a scan. It may never pass a finding.** `ci/quota-gate.sh` passes a step only when the tool's own output says
    the limit was reached (for example `API rate limit exceeded`, `secondary rate limit`, `monthly quota exceeded`, `HTTP 429`). A finding, a
    crash, a bad configuration, an authorisation error or a network error keeps the tool's exit status. The wording it recognises is tested in
-   `test/ci-quota-gate.test.js`.
+   `test/ci-quota-gate.test.js`. A finding is never a usage limit: when the output contains a tool diagnostic (for zizmor, a line starting
+   `error[`, `warning[`, `info[`, `help[` or `note[`), the step keeps the tool's exit status, even if the text also quotes limit wording.
    zizmor reports a refused REST call only as its status and URL, so a 403 from `api.github.com` counts as a usage limit only when the
    job's GitHub API budget is at zero. Any other 403, and any 401, fails the step.
 2. **A skipped scan is visible.** The step prints a `::warning` annotation and writes a note to the job summary saying that the scan did not

@@ -40,8 +40,14 @@ rest_budget_exhausted() {
   [ "$remaining" = "0" ]
 }
 
-if grep -Eiq -- "$QUOTA_PATTERN" "$log" || rest_budget_exhausted; then
-  message="$name did not run: its usage limit was reached (exit $status). This run was not scanned by $name. The next run or the scheduled run covers it."
+# A tool that reports findings prints one diagnostic per finding (zizmor: error[rule], warning[rule], info[rule], help[rule], note[rule]).
+# A finding is never a usage limit, even when its text quotes limit wording, so any diagnostic keeps the tool's own exit status.
+has_finding_diagnostics() {
+  grep -Eq '^(error|warning|info|help|note)\[' "$log"
+}
+
+if ! has_finding_diagnostics && { grep -Eiq -- "$QUOTA_PATTERN" "$log" || rest_budget_exhausted; }; then
+  message="$name did not run: its usage limit was reached (exit $status). This run was not scanned by $name. The next run of this check covers it."
   echo "::warning title=$name usage limit reached::$message"
   if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     printf '### %s: usage limit reached\n\n%s\n' "$name" "$message" >> "$GITHUB_STEP_SUMMARY"

@@ -112,6 +112,23 @@ test('bad invocations are refused rather than passed', () => {
   assert.equal(spawnSync('bash', [gate, 'zizmor', '--'], { encoding: 'utf8' }).status, 2, 'a command is required');
 });
 
+test('a finding is never a usage limit, even when its text quotes limit wording', () => {
+  const r = run('echo "error[dangerous-triggers]: use of fundamentally insecure workflow trigger"; echo "note: usage limit has been reached for this month"; exit 14');
+  assert.equal(r.status, 14);
+  assert.doesNotMatch(r.output, /::warning/);
+});
+
+test('a real finding is not passed because the REST budget is empty', () => {
+  const r = run('echo "error[artipacked]: credential persistence"; echo "HTTP status client error (403 Forbidden) for url (https://api.github.com/repos/x)" >&2; exit 1', { remaining: '0' });
+  assert.equal(r.status, 1);
+});
+
+test('the warning does not promise a scheduled run, which zizmor does not have', () => {
+  const r = run('echo "API rate limit exceeded"; exit 1');
+  assert.match(r.output, /The next run of this check covers it\./);
+  assert.doesNotMatch(r.output, /scheduled run/);
+});
+
 test('the wrapper parses as bash', () => {
   assert.equal(spawnSync('bash', ['-n', gate], { encoding: 'utf8' }).status, 0);
 });
