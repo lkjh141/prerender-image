@@ -14,7 +14,7 @@ that the files cannot make. The rules for what a usage limit may do are in the l
 | Secret scan (gitleaks 8.30.1) | `build.yml` (`secrets`) | Yes, through **Verified** | None | A generated canary must be flagged; otherwise the job fails. |
 | Workflow lint (zizmor 1.31.1) | `build.yml` (`workflow-lint`) | Yes at medium and high, through **Verified** | GitHub API budget for the online audits | Runs through `ci/quota-gate.sh`. Low-severity hints do not block. |
 | Dockerfile lint (hadolint 2.14.0) | `build.yml` (`dockerfile-lint`) | Yes, through **Verified** | None | The binary is checked against its SHA-256 first. |
-| CodeQL (JavaScript) | GitHub default setup (no workflow file) | No, unless you make it a required check | None for public repositories | Runs through the repository's default setup, which is on. |
+| CodeQL (JavaScript) | `codeql.yml` (advanced setup) | No, unless you make it a required check | None for public repositories | Needs the default setup turned off (owner, see below). |
 | OpenSSF Scorecard | `scorecard.yml` | No; informational | GitHub API budget | Runs through a usage-limit decision (last section). |
 | Dependency review | `dependency-review.yml` | No, unless you make it a required check | None for public repositories | Fails at high severity. |
 | Socket Security (GitHub App) | Installed by the owner | No, unless you make it required | Free plan limits (check the Socket plan page) | Flags malicious npm releases in pull requests. |
@@ -40,8 +40,8 @@ that the files cannot make. The rules for what a usage limit may do are in the l
 
 - **Secret protection and Dependabot security updates:** Settings → Code security. Both are free for a public repository. Turn on push
   protection for secret scanning.
-- **CodeQL:** the repository's default setup runs CodeQL on the JavaScript. There is no advanced `codeql.yml`, so there is one CodeQL run,
-  not two. To change this, use Settings → Code security; do not add an advanced workflow while the default setup is on.
+- **CodeQL:** the advanced workflow `codeql.yml` is the CodeQL setup. The owner must turn off the repository's default setup under Settings →
+  Code security. While the default setup is on, GitHub refuses the advanced workflow, and its run fails. Turn the default setup off first.
 - **Branch protection on `main`:** require **Verified**. Do not add CodeQL, Scorecard, dependency review or any GitHub App to the required
   checks unless you accept that their usage-limit failures would then block merges.
 - **Code owners (optional):** `.github/CODEOWNERS` takes effect only when "Require review from Code Owners" is on. With it on, a Dependabot
