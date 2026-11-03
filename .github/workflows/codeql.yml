@@ -1,6 +1,6 @@
 name: CodeQL
 
-# Code scanning for the JavaScript in this repository (server, lib, scripts and tests). Free for a public repository.
+# Code scanning for the JavaScript in this repository (server, lib, scripts and tests) and for its GitHub Actions workflows. Free for a public repository.
 # If CodeQL "default setup" is also turned on in the repository settings, GitHub refuses this advanced setup: keep only one of the
 # two (see docs/security-checks.md).
 
@@ -21,9 +21,17 @@ concurrency:
 
 jobs:
   analyze:
-    name: Analyze JavaScript
+    name: Analyze ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: JavaScript
+            language: javascript-typescript
+          - name: GitHub Actions workflows
+            language: actions
     permissions:
       contents: read
       security-events: write
@@ -35,9 +43,9 @@ jobs:
 
       - uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
-          languages: javascript-typescript
+          languages: ${{ matrix.language }}
           build-mode: none
 
       - uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
-          category: /language:javascript-typescript
+          category: /language:${{ matrix.language }}
