@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Runs one command that calls a service with a usage limit (a GitHub API budget, a monthly scan quota).
+#
+# When the command fails AND its output says the limit was reached, the step passes with a warning, because a limit must not
+# block the build. The warning and the job summary say that the scan did not run. Every other failure keeps the command's own
+# exit status: a finding, a crash, a bad configuration, or a network error that is not a limit still fails the step. The full
+# log is printed either way, so nothing the tool said is hidden.
+#
+# Usage: tools/ci/quota-gate.sh <name> -- <command> [arguments...]
+set -uo pipefail
+
+name="${1:-}"
+[ -n "$name" ] || { echo "quota-gate: a name is required" >&2; exit 2; }
+shift
+[ "${1:-}" = "--" ] && shift
+[ "$#" -gt 0 ] || { echo "quota-gate: no command given" >&2; exit 2; }
+
+# The wording services use when a usage limit is exhausted. Kept specific on purpose: a finding that merely contains the
+# word "limit" or "rate" does not match.
+QUOTA_PATTERN='API rate limit exceeded|secondary rate limit|rate limit (has been )?exceeded|usage limit (has been |was )?(reached|exceeded)|monthly (limit|quota) (reached|exceeded)|quota (has been )?(reached|exceeded)|HTTP[^ ]* 429|status( code)?:? 429|too many requests'
+
+log="$(mktemp)"
+trap 'rm -f "$log"' EXIT
+
+"$@" >"$log" 2>&1
+status=$?
+cat "$log"
+
+if [ "$status" -eq 0 ]; then
+  exit 0
+fi
+
+if grep -Eiq -- "$QUOTA_PATTERN" "$log"; then
+  message="$name did not run: its usage limit was reached (exit $status). This run was not scanned by $name. The next run or the scheduled run covers it."
+  echo "::warning title=$name usage limit reached::$message"
+  if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+    printf '### %s: usage limit reached\n\n%s\n' "$name" "$message" >> "$GITHUB_STEP_SUMMARY"
+  fi
+  exit 0
+fi
+
+exit "$status"

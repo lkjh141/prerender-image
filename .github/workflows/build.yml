@@ -17,6 +17,9 @@ concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# zizmor: cache-poisoning is reviewed for the setup-node steps below. zizmor flags them because this workflow publishes on pushes and tags.
+# The npm cache is restored only from the same branch or the default branch, and a pull request cannot write to the default branch's
+# cache scope. The publish job restores no npm cache; it reads only the build cache that the same run wrote.
 jobs:
   test:
     name: Tests and dependency audit
@@ -27,7 +30,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0 # zizmor: ignore[cache-poisoning]
         with:
           node-version: '22'
           cache: npm
@@ -53,7 +56,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0 # zizmor: ignore[cache-poisoning]
         with:
           node-version: '22'
           cache: npm
@@ -80,43 +83,23 @@ jobs:
       - name: Run every suite, with the browser (SSRF, response, input, exhaustion)
         run: npm test
 
+  # Build, test and scan the image. Nothing here publishes: the publish job needs this job to pass first.
   image:
-    name: Build, test, scan and publish the image
+    name: Build, test and scan the image
     needs: [test, adversarial]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read
-      packages: write
-      id-token: write
-      attestations: write
-    outputs:
-      image: ${{ steps.names.outputs.image }}
-      digest: ${{ steps.publish.outputs.digest }}
-    env:
-      PUBLISH: ${{ github.event_name != 'pull_request' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0 # zizmor: ignore[cache-poisoning]
         with:
           node-version: '22'
           cache: npm
-
-      - name: Work out the image name and tags
-        id: names
-        run: |
-          image="ghcr.io/${GITHUB_REPOSITORY,,}"
-          {
-            echo "image=${image}"
-            echo "tags<<EOF"
-            echo "${image}:latest"
-            echo "${image}:sha-${GITHUB_SHA::12}"
-            echo "${image}:$(date -u +%Y%m%d)"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
@@ -128,8 +111,8 @@ jobs:
           tags: prerender-image:ci
           # Always from nothing, so that `apk upgrade` sees today's packages. A cached layer from an earlier run kept libexpat 2.9.0 after 2.10.0 was
           # published (2026-11-03): a manual run, a pull request and a push to main all read the same stale `apk upgrade` layer, and the push builds
-          # are the ones that publish. The build takes about half a minute, so the cache saved nothing worth that. The publish step below reads
-          # the layers this step just wrote, so what is scanned is still what is published.
+          # are the ones that publish. The build takes about half a minute, so the cache saved nothing worth that. The publish job reads the same
+          # GitHub cache this step writes, so what is scanned is still what is published.
           no-cache: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -176,8 +159,43 @@ jobs:
           format: table
           version: v0.75.0
 
+  # Publishes on pushes only (not pull requests). The write permissions are granted here alone; the tests, the attack suites and the
+  # scan above run without them.
+  publish:
+    name: Publish the image and its attestation
+    needs: image
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    outputs:
+      image: ${{ steps.names.outputs.image }}
+      digest: ${{ steps.publish.outputs.digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Work out the image name and tags
+        id: names
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          {
+            echo "image=${image}"
+            echo "tags<<EOF"
+            echo "${image}:latest"
+            echo "${image}:sha-${GITHUB_SHA::12}"
+            echo "${image}:$(date -u +%Y%m%d)"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
       - name: Sign in to the container registry
-        if: env.PUBLISH == 'true'
         uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ghcr.io
@@ -186,7 +204,6 @@ jobs:
 
       - name: Publish the image
         id: publish
-        if: env.PUBLISH == 'true'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
@@ -202,7 +219,6 @@ jobs:
             org.opencontainers.image.description=Hardened, regularly rebuilt container image for the Prerender service
 
       - name: Attest where and how the image was built
-        if: env.PUBLISH == 'true'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ${{ steps.names.outputs.image }}
@@ -210,7 +226,6 @@ jobs:
           push-to-registry: true
 
       - name: Print the digest to pin
-        if: env.PUBLISH == 'true'
         run: |
           {
             echo "### Published"
@@ -226,7 +241,7 @@ jobs:
   # against it, and verify its build attestation. This is the verification of every merge onto main.
   verify-published:
     name: Verify the published image
-    needs: image
+    needs: publish
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -248,21 +263,129 @@ jobs:
 
       - name: Smoke test the image exactly as published
         run: |
-          ref="${{ needs.image.outputs.image }}@${{ needs.image.outputs.digest }}"
+          ref="${{ needs.publish.outputs.image }}@${{ needs.publish.outputs.digest }}"
           docker pull "$ref"
           scripts/smoke.sh "$ref"
 
       - name: Verify the build attestation
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh attestation verify "oci://${{ needs.image.outputs.image }}@${{ needs.image.outputs.digest }}" --repo "$GITHUB_REPOSITORY"
+        run: gh attestation verify "oci://${{ needs.publish.outputs.image }}@${{ needs.publish.outputs.digest }}" --repo "$GITHUB_REPOSITORY"
+
+  # Secret scan. The pinned gitleaks binary is the same release StageRage uses (its secret-scan.yml). A canary is generated at run
+  # time and must be flagged, so a scanner that silently finds nothing fails the job.
+  secrets:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # Release v8.30.1. The digest is the linux_x64 entry of the release's gitleaks_8.30.1_checksums.txt.
+      GITLEAKS_VERSION: 8.30.1
+      GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install pinned gitleaks
+        run: |
+          set -euo pipefail
+          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$archive" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}"
+          echo "${GITLEAKS_SHA256}  $RUNNER_TEMP/$archive" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/gitleaks-bin"
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP/gitleaks-bin" gitleaks
+          echo "GITLEAKS_BIN=$RUNNER_TEMP/gitleaks-bin/gitleaks" >> "$GITHUB_ENV"
+
+      - name: Verify the scanner flags a synthetic canary
+        run: |
+          set -euo pipefail
+          canary="$RUNNER_TEMP/canary"
+          mkdir -p "$canary"
+          # A random token in the shape of a GitHub personal access token. It is built here and never committed.
+          token="ghp_$(openssl rand -hex 18)"
+          printf 'GITHUB_TOKEN=%s\n' "$token" > "$canary/canary.env"
+          status=0
+          "$GITLEAKS_BIN" dir --no-banner --redact --exit-code 1 "$canary" || status=$?
+          if [ "$status" -ne 1 ]; then
+            echo "::error::gitleaks did not flag the canary (exit $status)"
+            exit 1
+          fi
+
+      - name: Scan the commits of this run
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          base="$PUSH_BEFORE"
+          if [ "$EVENT" = "pull_request" ]; then base="$PR_BASE"; fi
+          if [ -z "$base" ] || [[ "$base" =~ ^0+$ ]]; then
+            "$GITLEAKS_BIN" git --no-banner --redact --exit-code 1 --log-opts="$HEAD_SHA" .
+          else
+            "$GITLEAKS_BIN" git --no-banner --redact --exit-code 1 --log-opts="$base..$HEAD_SHA" .
+          fi
+
+  # Workflow lint. zizmor audits the workflows for unsafe patterns. Its online audits read tags through the GitHub API with this job's
+  # token, which is a usage budget: when it runs out, ci/quota-gate.sh passes the step with a warning instead of failing the build.
+  # Any other failure still fails it. Only medium and high findings block.
+  workflow-lint:
+    name: Workflow lint (zizmor)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned zizmor
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/zizmor-venv"
+          "$RUNNER_TEMP/zizmor-venv/bin/pip" install --quiet --require-hashes -r ci/requirements-zizmor.txt
+          echo "$RUNNER_TEMP/zizmor-venv/bin" >> "$GITHUB_PATH"
+
+      - name: Audit the workflows with zizmor
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ci/quota-gate.sh zizmor -- zizmor --min-severity medium --format plain .github/
+
+  # Dockerfile lint. The pinned hadolint release is checked against its published SHA-256 before it runs.
+  dockerfile-lint:
+    name: Dockerfile lint (hadolint)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      # Release v2.14.0. The digest is the linux-x86_64 entry of the release's checksum file.
+      HADOLINT_VERSION: v2.14.0
+      HADOLINT_SHA256: 6bf226944684f56c84dd014e8b979d27425c0148f61b3bd99bcc6f39e9dc5a47
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned hadolint
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/hadolint" \
+            "https://github.com/hadolint/hadolint/releases/download/${HADOLINT_VERSION}/hadolint-Linux-x86_64"
+          echo "${HADOLINT_SHA256}  $RUNNER_TEMP/hadolint" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/hadolint"
+
+      - name: Lint the Dockerfile
+        run: |
+          "$RUNNER_TEMP/hadolint" Dockerfile
 
   # The one result everything else keys on: branch protection requires this check, and the auto-merge workflow looks for it by
-  # name on the pull request's head commit. It passes only when every job above passed (the publish check is skipped on pull
-  # requests, which is fine).
+  # name on the pull request's head commit. It passes only when every job above passed. On pull requests the publish jobs are
+  # skipped, which is expected; an upstream failure still fails Verified, because the jobs it needs are not skipped.
   verified:
     name: Verified
-    needs: [test, adversarial, image, verify-published]
+    needs: [test, adversarial, image, publish, verify-published, secrets, workflow-lint, dockerfile-lint]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 2
@@ -274,7 +397,8 @@ jobs:
         run: |
           node -e '
             const needs = JSON.parse(process.env.RESULTS);
-            const bad = Object.entries(needs).filter(([name, n]) => !(n.result === "success" || (name === "verify-published" && n.result === "skipped")));
+            const skippable = new Set(["publish", "verify-published"]);
+            const bad = Object.entries(needs).filter(([name, n]) => !(n.result === "success" || (skippable.has(name) && n.result === "skipped")));
             for (const [name, n] of Object.entries(needs)) console.log(name + ": " + n.result);
             if (bad.length) { console.error("Not verified: " + bad.map(([name]) => name).join(", ")); process.exit(1); }
           '

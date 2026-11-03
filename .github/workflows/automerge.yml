@@ -5,8 +5,10 @@ name: Auto-merge
 #
 # This workflow never checks out or runs code from a pull request. It runs the script from main and only reads facts through the API.
 
+# zizmor: dangerous-triggers is reviewed here. The workflow_run trigger is safe because the job checks out only main (its script
+# directory, sparse) and runs scripts/automerge.js from main; it never checks out or runs code from a pull request.
 on:
-  workflow_run:
+  workflow_run: # zizmor: ignore[dangerous-triggers]
     workflows: [Build]
     types: [completed]
   pull_request_review:
