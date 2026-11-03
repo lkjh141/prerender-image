@@ -11,9 +11,16 @@ Every pull request and every push to `main` runs `.github/workflows/build.yml`:
 | --- | --- |
 | Tests and dependency audit | Unit tests (no browser) pass and `npm audit --omit=dev` is clean. |
 | Attack and load tests against a real browser | The SSRF, response, input and exhaustion suites in `test/adversarial/` pass against a real Chromium. |
-| Build, test, scan and publish | The image builds, `scripts/smoke.sh` passes against it (read-only, no capabilities, non-root, clean shutdown), Trivy finds nothing fixable at HIGH or CRITICAL. On `main` it is then published with provenance and an SBOM. |
+| Build, test and scan the image | The image builds, `scripts/smoke.sh` passes against it (read-only, no capabilities, non-root, clean shutdown), Trivy finds nothing fixable at HIGH or CRITICAL. This job holds no write permission. |
+| Publish the image and its attestation | On `main` and tags only, after the scan passes: the image is pushed with provenance and an SBOM, and an attestation is written. This job alone holds the write permissions. |
 | Verify the published image | On `main` only: the image is pulled **by the digest that was just pushed**, smoke-tested again, and its build attestation is verified. |
-| **Verified** | One result that is green only when all of the above are. Branch protection and the auto-merge workflow both key on this name. |
+| Secret scan (gitleaks) | The pinned gitleaks 8.30.1 finds no secret in this run's commits. A generated canary must be flagged, so a scanner that finds nothing fails the job. |
+| Workflow lint (zizmor) | zizmor 1.31.1 finds no medium or high issue in the workflows. Its online audits use the job's GitHub API budget; see `docs/security-checks.md`. |
+| Dockerfile lint (hadolint) | The pinned hadolint 2.14.0 finds no problem in the Dockerfile. |
+| **Verified** | One result that is green only when all of the above are. Branch protection and the auto-merge workflow both key on this name. A skipped publish job on a pull request is expected. |
+
+CodeQL runs in its own workflow (`codeql.yml`), once the repository's default CodeQL setup is turned off. OpenSSF Scorecard and dependency review run in their own workflows (`scorecard.yml`, `dependency-review.yml`).
+They are not part of **Verified**, and branch protection decides whether they block. `docs/security-checks.md` lists each check and its usage limit.
 
 A weekly run rebuilds from scratch so Alpine and Chromium security fixes are picked up. Without it, the image would only change when someone changed the code,
 and security fixes in the operating system packages would wait for that.

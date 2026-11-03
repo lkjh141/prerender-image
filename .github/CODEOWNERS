@@ -1,0 +1,9 @@
+# Owner review for the files that decide what reaches the published image and what merges without a button press.
+# This takes effect only when branch protection has "Require review from Code Owners" turned on; see docs/security-checks.md before
+# turning it on, because it changes how Dependabot updates to these files are merged.
+/.github/workflows/            @lkjh141
+/.github/dependabot.yml        @lkjh141
+/.github/CODEOWNERS            @lkjh141
+/Dockerfile                    @lkjh141
+/scripts/automerge.js          @lkjh141
+/scripts/automerge-policy.js   @lkjh141
