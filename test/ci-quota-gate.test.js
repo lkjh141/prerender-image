@@ -1,33 +1,37 @@
 'use strict';
 
-// Contract for ci/quota-gate.sh, the wrapper that lets a usage-limited check pass ONLY when its own output says the limit was reached.
-// Every other failure must keep its exit status, or the wrapper would hide real findings.
+// Contract for ci/quota-gate.sh, the wrapper that lets a usage-limited check pass ONLY when its own output says the limit was reached,
+// or, for GitHub's REST API, when the budget is used up. Every other failure must keep its exit status, or the wrapper would hide real findings.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { spawnSync } = require('node:child_process');
-const { mkdtempSync, readFileSync, rmSync, writeFileSync } = require('node:fs');
+const { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const path = require('node:path');
 
 const gate = path.join(__dirname, '..', 'ci', 'quota-gate.sh');
 
-function withSummary(fn) {
+// One scratch directory per test: a summary file and a stand-in for `gh` that prints the remaining REST budget (FAKE_REMAINING).
+function scratch(fn) {
   const dir = mkdtempSync(path.join(tmpdir(), 'quota-gate-'));
-  const summary = path.join(dir, 'summary.md');
-  writeFileSync(summary, '');
   try {
-    return fn(summary);
+    const summary = path.join(dir, 'summary.md');
+    const fakeGh = path.join(dir, 'fake-gh');
+    writeFileSync(summary, '');
+    writeFileSync(fakeGh, '#!/bin/sh\necho "$FAKE_REMAINING"\n');
+    chmodSync(fakeGh, 0o755);
+    return fn({ summary, fakeGh });
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 }
 
-function run(shellCommand) {
-  return withSummary(summary => {
+function run(shellCommand, { remaining = '4000' } = {}) {
+  return scratch(({ summary, fakeGh }) => {
     const result = spawnSync('bash', [gate, 'zizmor', '--', 'sh', '-c', shellCommand], {
       encoding: 'utf8',
-      env: { PATH: process.env.PATH, GITHUB_STEP_SUMMARY: summary },
+      env: { PATH: process.env.PATH, GITHUB_STEP_SUMMARY: summary, QUOTA_GATE_GH: fakeGh, FAKE_REMAINING: remaining },
     });
     return {
       status: result.status,
@@ -52,7 +56,7 @@ test('a real finding keeps its exit status and writes no usage-limit note', () =
 });
 
 test('an exhausted usage limit passes with a warning and a summary note', () => {
-  const r = run('echo "HTTP status client error (403): API rate limit exceeded for installation" >&2; exit 1');
+  const r = run('echo "HTTP status client error (403 Forbidden): API rate limit exceeded for installation" >&2; exit 1');
   assert.equal(r.status, 0);
   assert.match(r.output, /::warning title=zizmor usage limit reached::zizmor did not run/);
   assert.match(r.summary, /zizmor: usage limit reached/);
@@ -60,7 +64,15 @@ test('an exhausted usage limit passes with a warning and a summary note', () => 
 });
 
 test('the other usual wordings of a usage limit are recognised', () => {
-  for (const line of ['secondary rate limit triggered', 'usage limit has been reached for this month', 'monthly quota exceeded', 'HTTP 429 Too Many Requests', 'status code: 429']) {
+  const lines = [
+    'secondary rate limit triggered',
+    'usage limit has been reached for this month',
+    'monthly quota exceeded',
+    'HTTP 429 Too Many Requests',
+    'status code: 429',
+    'HTTP status client error (429 Too Many Requests) for url (https://github.com/actions/setup-node.git/git-upload-pack)',
+  ];
+  for (const line of lines) {
     assert.equal(run(`echo "${line}"; exit 3`).status, 0, `"${line}" is a usage limit`);
   }
 });
@@ -70,8 +82,22 @@ test('limit-like words inside a finding do not turn the failure into a pass', ()
   assert.equal(r.status, 9);
 });
 
-test('an authorisation or network error is a real failure, not a usage limit', () => {
-  assert.equal(run('echo "HTTP status client error (401 Unauthorized) for url"; exit 1').status, 1);
+test('a REST 403 from api.github.com is a usage limit only when the API budget is used up', () => {
+  const refused = 'echo "HTTP status client error (403 Forbidden) for url (https://api.github.com/repos/x/y/tags)" >&2; exit 1';
+  const exhausted = run(refused, { remaining: '0' });
+  assert.equal(exhausted.status, 0);
+  assert.match(exhausted.output, /::warning title=zizmor usage limit reached/);
+  assert.equal(run(refused, { remaining: '4000' }).status, 1, 'budget left: not a usage limit');
+});
+
+test('a 403 from another host, or an authorisation error, is never decided by the API budget', () => {
+  const otherHost = 'echo "HTTP status client error (403 Forbidden) for url (https://github.com/x/y.git/git-upload-pack)" >&2; exit 1';
+  assert.equal(run(otherHost, { remaining: '0' }).status, 1);
+  const unauthorised = 'echo "HTTP status client error (401 Unauthorized) for url (https://api.github.com/repos/x)" >&2; exit 1';
+  assert.equal(run(unauthorised, { remaining: '0' }).status, 1);
+});
+
+test('another network error is a real failure, not a limit', () => {
   assert.equal(run("echo \"couldn't list tags: connection reset by peer\"; exit 4").status, 4);
 });
 

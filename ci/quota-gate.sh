@@ -30,7 +30,17 @@ if [ "$status" -eq 0 ]; then
   exit 0
 fi
 
-if grep -Eiq -- "$QUOTA_PATTERN" "$log"; then
+# zizmor, and other tools that call the REST API, report a refused request only as its status and URL, for example
+# "HTTP status client error (403 Forbidden) for url (https://api.github.com/...)". GitHub answers an exhausted budget with a 403,
+# so for api.github.com the budget decides: a budget with nothing left (remaining 0) is a usage limit. Any other 403 is not.
+rest_budget_exhausted() {
+  grep -Eq 'HTTP status client error \(403[^)]*\) for url \(https://api\.github\.com/' "$log" || return 1
+  local remaining
+  remaining="$("${QUOTA_GATE_GH:-gh}" api rate_limit --jq '.resources.core.remaining' 2>/dev/null)" || return 1
+  [ "$remaining" = "0" ]
+}
+
+if grep -Eiq -- "$QUOTA_PATTERN" "$log" || rest_budget_exhausted; then
   message="$name did not run: its usage limit was reached (exit $status). This run was not scanned by $name. The next run or the scheduled run covers it."
   echo "::warning title=$name usage limit reached::$message"
   if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
