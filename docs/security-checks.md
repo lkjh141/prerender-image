@@ -13,7 +13,7 @@ that the files cannot make. The rules for what a usage limit may do are in the l
 | Verify the published image | `build.yml` (`verify-published`) | Yes, on pushes | None | Existing. |
 | Secret scan (gitleaks 8.30.1) | `build.yml` (`secrets`) | Yes, through **Verified** | None | A generated canary must be flagged; otherwise the job fails. |
 | Workflow lint (zizmor 1.31.1) | `build.yml` (`workflow-lint`) | Yes at medium and high, through **Verified** | GitHub API budget for the online audits | Runs through `ci/quota-gate.sh`. Low-severity hints do not block. |
-| Dockerfile lint (hadolint 2.14.0) | `build.yml` (`dockerfile-lint`) | Yes, through **Verified** | None | The binary is checked against its SHA-256 first. |
+| Dockerfile lint (hadolint 2.14.0) | `build.yml` (`dockerfile-lint`) | Yes, through **Verified** | None | The binary is checked against its SHA-256 first. DL3018 (unpinned `apk add`) is ignored on purpose, in `.hadolint.yaml`: the weekly rebuild exists to take Alpine's security fixes. |
 | CodeQL (JavaScript) | `codeql.yml` (advanced setup) | No, unless you make it a required check | None for public repositories | Needs the default setup turned off (owner, see below). |
 | OpenSSF Scorecard | `scorecard.yml` | No; informational | GitHub API budget | Runs through a usage-limit decision (last section). |
 | Dependency review | `dependency-review.yml` | No, unless you make it a required check | None for public repositories | Fails at high severity. |

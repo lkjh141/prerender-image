@@ -1,0 +1,6 @@
+# hadolint settings for the Dockerfile lint job (see .github/workflows/build.yml).
+#
+# DL3018 (pin versions in apk add) is ignored on purpose. The image installs the current Alpine packages: the weekly rebuild exists to
+# take their security fixes, and a pinned version would hold back exactly those fixes. Pinning is the wrong trade for this image.
+ignored:
+  - DL3018
