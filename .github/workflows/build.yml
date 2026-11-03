@@ -126,10 +126,11 @@ jobs:
           context: .
           load: true
           tags: prerender-image:ci
-          # The weekly build starts from nothing so that `apk upgrade` sees today's packages.
-          # A manual run is started to pick up a fix that was just published, so it starts from nothing too. With the cache it reused the
-          # previous run's `apk upgrade` layer and kept yesterday's packages (libexpat 2.9.0 after 2.10.0 was out, 2026-11-03).
-          no-cache: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+          # Always from nothing, so that `apk upgrade` sees today's packages. A cached layer from an earlier run kept libexpat 2.9.0 after 2.10.0 was
+          # published (2026-11-03): a manual run, a pull request and a push to main all read the same stale `apk upgrade` layer, and the push builds
+          # are the ones that publish. The build takes about half a minute, so the cache saved nothing worth that. The publish step below reads
+          # the layers this step just wrote, so what is scanned is still what is published.
+          no-cache: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
           labels: |
