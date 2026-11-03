@@ -128,7 +128,7 @@ jobs:
           tags: prerender-image:ci
           # The weekly build starts from nothing so that `apk upgrade` sees today's packages.
           # A manual run is started to pick up a fix that was just published, so it starts from nothing too. With the cache it reused the
-          # previous run's `apk upgrade` layer and shipped yesterday's packages (libexpat 2.9.0 after 2.10.0 was out, 2026-11-03).
+          # previous run's `apk upgrade` layer and kept yesterday's packages (libexpat 2.9.0 after 2.10.0 was out, 2026-11-03).
           no-cache: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
