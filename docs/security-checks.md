@@ -17,6 +17,9 @@ that the files cannot make. The rules for what a usage limit may do are in the l
 | CodeQL (JavaScript) | `codeql.yml` (advanced setup) | No, unless you make it a required check | None for public repositories | Needs the default setup turned off (owner, see below). |
 | OpenSSF Scorecard | `scorecard.yml` | No; informational | GitHub API budget | Runs through a usage-limit decision (last section). |
 | Dependency review | `dependency-review.yml` | No, unless you make it a required check | None for public repositories | Fails at high severity. |
+| VICE audit (3.5.0) | `security.yml` (`vice`) | No, unless you make it a required check | None | Fails below a score of 70. Read-only: its badge commit and pull-request comment are off. Its depth-1 history module is skipped (gitleaks reads the full history). Uploads its SARIF report to Code Scanning on pushes and the schedule, not on pull requests (a Dependabot or fork token is read-only). |
+| Grype (dependency vulnerabilities) | `security.yml` (`grype`) | No, unless you make it a required check | None | Fails on a critical finding. It downloads grype from GitHub releases; if that download fails, the scan is tried once more (a finding fails both attempts). SARIF is uploaded on pushes and the schedule only. |
+| govulncheck | `security.yml` (`govulncheck`) | No, unless you make it a required check | None | Reads Go modules only. This repository has none, so it reports "nothing to scan" and starts by itself if a `go.mod` is added. |
 | Socket Security (GitHub App) | Installed by the owner | No, unless you make it required | Free plan limits (check the Socket plan page) | Flags malicious npm releases in pull requests. |
 | Mend Bolt, Aikido, PR Insights Tagger, DepChecker Bot (GitHub Apps) | Installed by the owner, optional | No, unless you make them required | Mend Bolt: 5 scans per repository per day. Aikido: 2 repositories on the free plan. | Optional. Read each app's data terms before installing. |
 
