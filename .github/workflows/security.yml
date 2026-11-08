@@ -1,16 +1,20 @@
 name: "security"
 
+# Extra scanners that run beside the checks in build.yml, codeql.yml and dependency-review.yml (see
+# docs/security-checks.md). Dependency review is NOT repeated here: it has its own workflow. Nothing in this file may hold
+# more than read access to the repository, because build.yml's zizmor job fails the build (Verified) on a workflow with broad
+# permissions or an unpinned action.
+
 on:
   pull_request:
   push:
     branches: [main]
   schedule:
     - cron: "0 2 * * *"
+  workflow_dispatch:
 
 permissions:
-  contents: write
-  pull-requests: write
-  security-events: write
+  contents: read
 
 concurrency:
   group: security-${{ github.event.pull_request.number || github.ref }}
@@ -18,20 +22,58 @@ concurrency:
 
 jobs:
   vice:
+    name: vice
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write # uploads the SARIF report; this repository is public, so Code Scanning is free
+    env:
+      # VICE's git-history module ignores .viceignore and, in this depth-1 checkout, reads the whole current tree as one
+      # commit, so it repeats the Code Secrets module and reports its placeholders again. Real history scanning is gitleaks
+      # (build.yml, fetch-depth 0).
+      VICE_SKIP_GIT_HISTORY: "1"
     steps:
-      - uses: actions/checkout@v7
-      - uses: Webba-Creative-Technologies/vice@v3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # VICE 3.5.0. Its badge commit and pull-request comment need write access and are switched off:
+      # nothing in this repository may be changed by a scanner. The minimum score stays 70.
+      # The SARIF upload needs a token that can write security events; a pull request from Dependabot or a fork gets a
+      # read-only token, so the upload happens on pushes and the schedule only. The score gate runs on every event.
+      - uses: Webba-Creative-Technologies/vice@640e6ca11dc50dda58437f3a656291e3c1003fff # v3.5.0
+        id: vice
+        with:
+          path: "."
+          min-score: 70
+          fail-on-score: true
+          comment-pr: false
+          update-badge: false
+          upload-sarif: ${{ github.event_name != 'pull_request' }}
+      - name: Show VICE findings
+        if: always() && steps.vice.outputs.report-path != ''
+        env:
+          VICE_REPORT: ${{ steps.vice.outputs.report-path }}
+        run: |
+          jq -r '"score \(.score) grade \(.grade // "?") findings \((.findings // []) | length)"' "$VICE_REPORT" || true
+          # severity, module and title only: never the matched text, which can hold a secret
+          jq -r '(.findings // [])[] | "[\(.severity)] \(.module // "?"): \(.title // "?")"' "$VICE_REPORT" | sort | uniq -c | sort -rn | head -60 || true
+
+  # Do not rename this job, its id, or its matrix key, and do not remove it. Code scanning on main already holds the
+  # configuration ".github/workflows/security.yml:codeql/language:actions" from this job. The repository ruleset "Merge"
+  # requires CodeQL results on every pull request, and a pull request that no longer reports a configuration that main has is
+  # held with "Code scanning is still expecting 1 result from CodeQL". Removing the job would block every later pull request.
+  # (It repeats the Actions analysis in codeql.yml; the Go analysis that used to sit here never produced results and is gone.)
   codeql:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        language: ["go", "actions"]
+        language: ["actions"]
     permissions:
       actions: read
       contents: read
-      pull-requests: read
       security-events: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -40,56 +82,67 @@ jobs:
       - uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           languages: ${{ matrix.language }}
-      - uses: github/codeql-action/autobuild@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+          build-mode: none
       - uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
 
   grype:
+    name: grype
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
-      security-events: write
-      actions: read
       contents: read
+      security-events: write # uploads the SARIF report
+      actions: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # The action downloads grype from GitHub releases on every run and fails when that download answers 5xx. The scan is
+      # tried a second time only when the first attempt fails; a real finding fails both attempts, so a finding is never
+      # hidden, and the job fails if the second attempt fails.
       - uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
         id: scan
+        continue-on-error: true
         with:
           path: "."
           fail-build: true
           severity-cutoff: critical
-      - uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+      - uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        id: scan-retry
+        if: steps.scan.outcome == 'failure'
         with:
-          sarif_file: ${{ steps.scan.outputs.sarif }}
+          path: "."
+          fail-build: true
+          severity-cutoff: critical
+      # Uploaded on pushes and the schedule only: a pull request from Dependabot or a fork has a read-only token.
+      - uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        if: always() && github.event_name != 'pull_request' && (steps.scan-retry.outputs.sarif || steps.scan.outputs.sarif) != ''
+        with:
+          sarif_file: ${{ steps.scan-retry.outputs.sarif || steps.scan.outputs.sarif }}
+          category: grype
 
   govulncheck:
+    name: govulncheck
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
-      security-events: write
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # govulncheck reads Go modules only. This repository is Node.js and has none, so the scan runs only when a go.mod
+      # exists; it starts on its own if one is ever added.
+      - name: Look for Go modules
+        id: gomod
+        run: |
+          if [ -n "$(find . -name go.mod -not -path '*/node_modules/*' -print -quit)" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "No go.mod in the repository: nothing for govulncheck to scan."
+          fi
       - uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1.1.0
+        if: steps.gomod.outputs.present == 'true'
         with:
-          output-format: sarif
-          output-file: results.sarif
-      - uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
-        with:
-          sarif_file: results.sarif
-
-  dependency-review:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
-        with:
-          fail-on-severity: critical
-          allow-licenses: BSD-2-Clause, BSD-3-Clause, MIT, Apache-2.0, MPL-2.0, ISC
+          output-format: text
